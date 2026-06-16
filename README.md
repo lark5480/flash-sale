@@ -1,0 +1,169 @@
+# Flash Sale - 秒杀系统
+
+基于 Spring Cloud 微服务架构的秒杀系统，支持高并发场景下的商品秒杀、库存扣减和订单管理。
+
+## 技术栈
+
+| 层级 | 技术 |
+|------|------|
+| 语言 | Java 21 |
+| 框架 | Spring Boot 3.2.0 + Spring Cloud 2023.0.0 |
+| 注册/配置中心 | Nacos |
+| 网关 | Spring Cloud Gateway |
+| ORM | MyBatis-Plus 3.5.5 |
+| 数据库 | MySQL 8.0 |
+| 缓存 | Redis + Redisson 3.24.3 |
+| 消息队列 | RocketMQ 5.3.0 (server) + rocketmq-spring-boot-starter 2.3.0 (client) |
+| 认证 | JWT (jjwt 0.12.3) |
+| 前端 | Vue 3 + Vite + Element Plus (管理端) |
+
+## 项目结构
+
+```
+flash-sale
+├── flash-common        # 公共模块：统一返回、异常处理、工具类、常量
+├── flash-model         # 数据模型：实体、DTO、VO、枚举
+├── flash-mapper        # 数据访问：MyBatis-Plus Mapper
+├── flash-service       # 业务逻辑：Service 层、配置、消息生产者/消费者
+├── flash-api           # 用户端 REST API（端口 8081）
+├── flash-admin         # 管理端 REST API（端口 8082）
+├── flash-gateway       # API 网关（端口 8080）
+├── flash-frontend      # 用户端前端（Vue 3）
+├── flash-admin-frontend # 管理端前端（Vue 3 + Element Plus）
+└── sql                 # 数据库初始化脚本
+```
+
+## 核心功能
+
+### 用户端
+- 注册 / 登录（JWT 双 Token：accessToken + refreshToken）
+- 浏览商品列表、查看商品详情
+- 查看进行中的秒杀活动
+- 秒杀下单（Redis Lua 原子扣库存 + RocketMQ 异步创建订单）
+- 轮询订单处理状态
+- 查看我的订单
+- 支付订单 / 取消订单
+
+### 管理端
+- 管理员登录
+- 商品 CRUD（上架/下架）
+- 秒杀活动 CRUD + 状态管理（激活时自动预热 Redis 缓存）
+- 订单列表查看
+- 用户列表 + 启用/禁用
+
+### 自动化
+- 秒杀活动状态自动流转（定时任务：待开始 -> 进行中 -> 已结束）
+- 订单超时自动取消（15 分钟未支付，自动归还 DB + Redis 库存）
+- Token 刷新
+
+## 环境依赖
+
+| 组件 | 版本 | 默认端口 |
+|------|------|----------|
+| JDK | 21+ | - |
+| MySQL | 8.0 | 3306 |
+| Redis | 6+ | 6379 |
+| Nacos | 2.x | 8848 |
+| RocketMQ | 5.3.0 | 9876 (NameServer) |
+| Node.js | 18+ | - |
+
+## 快速启动
+
+### 1. 初始化数据库
+
+```bash
+mysql -u root -p < sql/init.sql
+```
+
+### 2. 启动中间件
+
+确保 MySQL、Redis、Nacos、RocketMQ 均已启动。
+
+### 3. 启动后端服务
+
+```bash
+# 编译
+mvn clean package -DskipTests
+
+# 按顺序启动（网关最后）
+java -jar flash-api/target/flash-api-1.0.0.jar
+java -jar flash-admin/target/flash-admin-1.0.0.jar
+java -jar flash-gateway/target/flash-gateway-1.0.0.jar
+```
+
+### 4. 启动前端
+
+```bash
+# 用户端
+cd flash-frontend && npm install && npm run dev
+
+# 管理端
+cd flash-admin-frontend && npm install && npm run dev
+```
+
+### 5. 访问
+
+| 服务 | 地址 |
+|------|------|
+| 网关（统一入口） | http://localhost:8080 |
+| 用户端前端 | http://localhost:5173 |
+| 管理端前端 | http://localhost:5174 |
+
+默认管理员账号：`admin` / `admin123`
+
+## API 概览
+
+### 用户端（/api）
+
+| 方法 | 路径 | 说明 | 认证 |
+|------|------|------|------|
+| POST | /api/auth/register | 注册 | 否 |
+| POST | /api/auth/login | 登录 | 否 |
+| POST | /api/auth/refresh | 刷新 Token | 否 |
+| GET | /api/item/list | 商品列表 | 是 |
+| GET | /api/item/{id} | 商品详情 | 是 |
+| GET | /api/flash-sale/active | 进行中的秒杀活动 | 是 |
+| GET | /api/flash-sale/{id} | 秒杀活动详情 | 是 |
+| POST | /api/flash-sale/{id}/purchase | 秒杀下单 | 是 |
+| GET | /api/order/status?messageKey= | 轮询订单状态 | 是 |
+| GET | /api/order/list | 我的订单 | 是 |
+| GET | /api/order/{id} | 订单详情 | 是 |
+| POST | /api/order/{id}/pay | 支付订单 | 是 |
+| POST | /api/order/{id}/cancel | 取消订单 | 是 |
+
+### 管理端（/admin）
+
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| POST | /admin/auth/login | 管理员登录 |
+| GET/POST/PUT/DELETE | /admin/item/** | 商品管理 |
+| GET/POST/PUT/DELETE | /admin/flash-sale/** | 秒杀活动管理 |
+| PUT | /admin/flash-sale/{id}/status | 变更活动状态 |
+| GET | /admin/order/list | 订单列表 |
+| GET | /admin/order/{id} | 订单详情 |
+| GET | /admin/user/list | 用户列表 |
+| PUT | /admin/user/{id}/status | 启用/禁用用户 |
+
+## 秒杀下单流程
+
+```
+用户请求 → Gateway 鉴权 → API 校验活动状态
+    ↓
+Redis Lua 原子扣库存（RTT < 1ms）
+    ↓
+RocketMQ 异步发送下单消息
+    ↓
+立即返回 messageKey（客户端轮询）
+    ↓
+Consumer 消费：幂等校验 → 分布式锁 → DB 乐观锁扣库存 → 创建订单
+    ↓
+客户端轮询 /order/status 获取结果
+```
+
+## 文档
+
+| 文档 | 说明 |
+|------|------|
+| [01-架构概览](docs/01-architecture.md) | 系统架构、模块职责、核心链路、数据设计、安全认证 |
+| [02-部署指南](docs/02-deployment.md) | 中间件 Docker 配置、数据库初始化、服务启动、常见问题排查 |
+| [03-开发指南](docs/03-development.md) | API 接口文档、包结构规范、枚举值、代码规范、前端开发 |

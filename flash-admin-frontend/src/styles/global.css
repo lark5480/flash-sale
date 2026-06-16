@@ -1,0 +1,345 @@
+/* ========================================
+   Flash Sale Admin — Obsidian Luxe Design System
+   ======================================== */
+@import url('https://fonts.googleapis.com/css2?family=Playfair+Display:ital,wght@0,600;0,700&family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@500;600&display=swap');
+
+/* ----- Reset ----- */
+*,*::before,*::after { margin:0; padding:0; box-sizing:border-box; }
+html { -webkit-text-size-adjust:100%; -webkit-font-smoothing:antialiased; -moz-osx-font-smoothing:grayscale; }
+body {
+  font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  font-size: 16px; line-height: 1.6;
+  color: var(--color-text);
+  background: var(--color-bg);
+}
+:focus-visible { outline: 2px solid var(--color-accent); outline-offset: 2px; }
+::-webkit-scrollbar { width: 6px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.1); border-radius: 9999px; }
+
+/* ========================================
+   Design Tokens
+   ======================================== */
+:root {
+  /* Accent: Champagne Gold */
+  --color-accent:          #C8A45C;
+  --color-accent-dark:     #A8883E;
+  --color-accent-light:    rgba(200,164,92,0.08);
+  --color-accent-glow:     rgba(200,164,92,0.15);
+  --color-primary:         #C8A45C;
+  --color-primary-dark:    #A8883E;
+  --color-primary-light:   rgba(200,164,92,0.08);
+
+  /* Neutrals: Obsidian */
+  --color-bg:              #06060A;
+  --color-surface:         rgba(255,255,255,0.03);
+  --color-text:            #F0EDE8;
+  --color-text-secondary:  #8A8780;
+  --color-text-muted:      #5A5752;
+  --color-border:          rgba(255,255,255,0.06);
+  --color-divider:         rgba(255,255,255,0.04);
+  --color-dark:            #08080E;
+  --color-dark-light:      #101018;
+
+  /* Semantic */
+  --color-success:      #2D6A4F;
+  --color-success-light: rgba(45,106,79,0.15);
+  --color-warning:      #F59E0B;
+  --color-warning-light: rgba(245,158,11,0.1);
+  --color-danger:       #E74C3C;
+  --color-danger-light: rgba(231,76,60,0.12);
+  --color-info:         #60A5FA;
+  --color-info-light:   rgba(96,165,250,0.1);
+
+  /* Glass */
+  --glass-bg:     rgba(255,255,255,0.03);
+  --glass-border: rgba(255,255,255,0.06);
+  --glass-blur:   20px;
+
+  /* Radius */
+  --radius-sm: 6px; --radius-md: 10px; --radius-lg: 16px; --radius-xl: 24px;
+
+  /* Shadows */
+  --shadow-sm: 0 1px 3px rgba(0,0,0,0.4);
+  --shadow-md: 0 4px 12px rgba(0,0,0,0.5);
+  --shadow-lg: 0 8px 32px rgba(0,0,0,0.6);
+  --shadow-xl: 0 16px 48px rgba(0,0,0,0.7);
+
+  /* Transitions */
+  --transition-fast: 150ms cubic-bezier(0.4,0,0.2,1);
+  --transition-normal: 250ms cubic-bezier(0.4,0,0.2,1);
+
+  /* Typography */
+  --font-heading: 'Playfair Display', 'Georgia', serif;
+  --font-body: 'Inter', sans-serif;
+  --font-mono: 'JetBrains Mono', monospace;
+}
+
+/* ========================================
+   Element Plus Dark Theme Overrides
+   ======================================== */
+:root {
+  /* Brand */
+  --el-color-primary:        #C8A45C;
+  --el-color-primary-light-3: rgba(200,164,92,0.3);
+  --el-color-primary-light-5: rgba(200,164,92,0.5);
+  --el-color-primary-light-7: rgba(200,164,92,0.7);
+  --el-color-primary-light-8: rgba(200,164,92,0.8);
+  --el-color-primary-light-9: rgba(200,164,92,0.08);
+  --el-color-primary-dark-2: #A8883E;
+
+  /* Semantic */
+  --el-color-success:      #2D6A4F;
+  --el-color-success-light-3: rgba(45,106,79,0.3);
+  --el-color-success-light-5: rgba(45,106,79,0.5);
+  --el-color-success-light-7: rgba(45,106,79,0.7);
+  --el-color-success-light-8: rgba(45,106,79,0.8);
+  --el-color-success-light-9: rgba(45,106,79,0.12);
+  --el-color-success-dark-2: #1F4D38;
+
+  --el-color-warning:      #F59E0B;
+  --el-color-warning-light-3: rgba(245,158,11,0.3);
+  --el-color-warning-light-5: rgba(245,158,11,0.5);
+  --el-color-warning-light-7: rgba(245,158,11,0.7);
+  --el-color-warning-light-8: rgba(245,158,11,0.8);
+  --el-color-warning-light-9: rgba(245,158,11,0.1);
+  --el-color-warning-dark-2: #D97706;
+
+  --el-color-danger:       #E74C3C;
+  --el-color-danger-light-3: rgba(231,76,60,0.3);
+  --el-color-danger-light-5: rgba(231,76,60,0.5);
+  --el-color-danger-light-7: rgba(231,76,60,0.7);
+  --el-color-danger-light-8: rgba(231,76,60,0.8);
+  --el-color-danger-light-9: rgba(231,76,60,0.1);
+  --el-color-danger-dark-2: #C0392B;
+
+  --el-color-info:       #8A8780;
+  --el-color-info-light-3: rgba(138,135,128,0.3);
+  --el-color-info-light-5: rgba(138,135,128,0.5);
+  --el-color-info-light-7: rgba(138,135,128,0.7);
+  --el-color-info-light-8: rgba(138,135,128,0.8);
+  --el-color-info-light-9: rgba(138,135,128,0.08);
+  --el-color-info-dark-2: #5A5752;
+
+  /* Menu / Sidebar */
+  --el-menu-bg-color:       #08080E;
+  --el-menu-text-color:     #8A8780;
+  --el-menu-hover-bg-color: rgba(200,164,92,0.06);
+  --el-menu-active-color:   #C8A45C;
+  --el-menu-hover-text-color: #F0EDE8;
+  --el-menu-border-color:   transparent;
+  --el-menu-sub-bg-color:   #0C0C12;
+
+  /* Backgrounds */
+  --el-bg-color:           #0A0A10;
+  --el-bg-color-overlay:   rgba(16,16,24,0.95);
+  --el-bg-color-page:      #06060A;
+
+  /* Text */
+  --el-text-color-primary:    #F0EDE8;
+  --el-text-color-regular:    #C4BFB8;
+  --el-text-color-secondary:  #8A8780;
+  --el-text-color-placeholder: #5A5752;
+
+  /* Border */
+  --el-border-color:         rgba(255,255,255,0.08);
+  --el-border-color-light:   rgba(255,255,255,0.04);
+  --el-border-color-lighter: rgba(255,255,255,0.02);
+
+  /* Fill */
+  --el-fill-color:         rgba(255,255,255,0.03);
+  --el-fill-color-light:   rgba(255,255,255,0.02);
+  --el-fill-color-blank:   #08080E;
+
+  /* Radius */
+  --el-border-radius-base:  6px;
+  --el-border-radius-small: 4px;
+  --el-border-radius-round: 9999px;
+
+  /* Disabled */
+  --el-disabled-bg-color: rgba(255,255,255,0.03);
+  --el-disabled-text-color: rgba(255,255,255,0.15);
+  --el-disabled-border-color: rgba(255,255,255,0.04);
+
+  /* Mask / Overlay */
+  --el-overlay-color: rgba(0,0,0,0.7);
+  --el-mask-color: rgba(0,0,0,0.6);
+
+  /* Button */
+  --el-button-font-weight: 600;
+  --el-button-border-color: rgba(255,255,255,0.1);
+  --el-button-hover-border-color: rgba(200,164,92,0.3);
+  --el-button-hover-text-color: #C8A45C;
+  --el-button-bg-color: rgba(255,255,255,0.05);
+  --el-button-hover-bg-color: rgba(255,255,255,0.08);
+
+  /* Input */
+  --el-input-bg-color: rgba(255,255,255,0.04);
+  --el-input-border-color: rgba(255,255,255,0.08);
+  --el-input-hover-border-color: rgba(255,255,255,0.15);
+  --el-input-focus-border-color: #C8A45C;
+  --el-input-placeholder-color: #5A5752;
+  --el-input-text-color: #F0EDE8;
+
+  /* Table */
+  --el-table-bg-color: transparent;
+  --el-table-tr-bg-color: transparent;
+  --el-table-header-bg-color: rgba(255,255,255,0.04);
+  --el-table-row-hover-bg-color: rgba(200,164,92,0.05);
+  --el-table-current-row-bg-color: rgba(200,164,92,0.06);
+  --el-table-striped-row-bg-color: rgba(255,255,255,0.02);
+  --el-table-border-color: rgba(255,255,255,0.06);
+  --el-table-text-color: #F0EDE8;
+  --el-table-header-text-color: #8A8780;
+  --el-table-expanded-cell-bg-color: transparent;
+
+  /* Dialog */
+  --el-dialog-bg-color: rgba(16,16,24,0.98);
+  --el-dialog-border-radius: var(--radius-lg);
+
+  /* Popover / Dropdown */
+  --el-popover-bg-color: rgba(16,16,24,0.98);
+
+  /* Tag */
+  --el-tag-bg-color: rgba(255,255,255,0.05);
+  --el-tag-border-color: rgba(255,255,255,0.08);
+
+  /* Pagination */
+  --el-pagination-button-bg-color: rgba(255,255,255,0.05);
+  --el-pagination-hover-color: #C8A45C;
+
+  /* Loading */
+  --el-loading-spinner-color: #C8A45C;
+}
+
+/* ----- Table: comprehensive dark overrides ----- */
+.el-table,
+.el-table__header-wrapper,
+.el-table__body-wrapper,
+.el-table__footer-wrapper {
+  background: transparent !important;
+}
+
+.el-table th.el-table__cell {
+  background: rgba(255,255,255,0.04) !important;
+  border-bottom: 1px solid rgba(255,255,255,0.08) !important;
+  color: #8A8780 !important;
+  font-weight: 600 !important;
+  font-size: 12px !important;
+  text-transform: uppercase !important;
+  letter-spacing: 0.5px !important;
+}
+
+.el-table td.el-table__cell {
+  background: transparent !important;
+  border-bottom: 1px solid rgba(255,255,255,0.04) !important;
+  color: #F0EDE8 !important;
+}
+
+.el-table--striped .el-table__body tr.el-table__row--striped td.el-table__cell {
+  background: rgba(255,255,255,0.02) !important;
+}
+
+.el-table__body tr:hover > td.el-table__cell {
+  background: rgba(200,164,92,0.05) !important;
+}
+
+.el-table--border .el-table__cell {
+  border-right: 1px solid rgba(255,255,255,0.06) !important;
+}
+
+.el-table .el-table__cell {
+  padding: 12px 0 !important;
+}
+
+/* Loading mask */
+.el-loading-mask {
+  background: rgba(6,6,10,0.7) !important;
+  backdrop-filter: blur(4px);
+}
+
+/* Empty state */
+.el-table__empty-text {
+  color: #5A5752 !important;
+}
+
+/* Pagination */
+.el-pagination {
+  --el-pagination-button-bg-color: transparent;
+  --el-pagination-hover-color: #C8A45C;
+}
+.el-pagination button {
+  background: transparent !important;
+  color: #8A8780 !important;
+}
+.el-pagination button:disabled {
+  color: rgba(255,255,255,0.15) !important;
+}
+
+/* ----- Sidebar menu active ----- */
+.el-menu-item.is-active {
+  background: rgba(200,164,92,0.08) !important;
+  border-right: 2px solid var(--color-accent) !important;
+  color: var(--color-accent) !important;
+}
+
+/* ----- Dialog glass ----- */
+.el-dialog {
+  backdrop-filter: blur(24px);
+  -webkit-backdrop-filter: blur(24px);
+  border: 1px solid rgba(255,255,255,0.06);
+}
+
+/* ----- Table glass ----- */
+.el-table {
+  --el-table-bg-color: var(--glass-bg) !important;
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+}
+
+/* ----- Input glass ----- */
+.el-input__wrapper {
+  background: rgba(255,255,255,0.03) !important;
+  backdrop-filter: blur(8px);
+  box-shadow: none !important;
+}
+.el-input__wrapper:hover { box-shadow: 0 0 0 1px rgba(255,255,255,0.1) inset !important; }
+
+/* ----- Primary button gold gradient ----- */
+.el-button--primary {
+  background: linear-gradient(135deg, #C8A45C 0%, #D4B96A 50%, #A8883E 100%) !important;
+  border: none !important;
+  color: #06060A !important;
+  font-weight: 600 !important;
+}
+.el-button--primary:hover {
+  box-shadow: 0 4px 20px rgba(200,164,92,0.3) !important;
+  background: linear-gradient(135deg, #D4B96A 0%, #E0C97E 50%, #B4944A 100%) !important;
+}
+
+/* ----- Select dropdown ----- */
+.el-select-dropdown {
+  background: rgba(16,16,24,0.98) !important;
+  backdrop-filter: blur(20px);
+  border: 1px solid rgba(255,255,255,0.06) !important;
+}
+.el-select-dropdown__item.hover,
+.el-select-dropdown__item:hover {
+  background: rgba(200,164,92,0.08) !important;
+}
+
+/* ----- Form label ----- */
+.el-form-item__label { color: #8A8780 !important; }
+
+/* ----- Pagination buttons ----- */
+.el-pager li.is-active {
+  background: var(--color-accent) !important;
+  color: #06060A !important;
+}
+
+/* ========================================
+   Reduced Motion
+   ======================================== */
+@media (prefers-reduced-motion: reduce) {
+  *,*::before,*::after { animation-duration:0.01ms !important; animation-iteration-count:1 !important; transition-duration:0.01ms !important; }
+}
