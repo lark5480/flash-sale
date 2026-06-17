@@ -1,0 +1,33 @@
+# ==================== 生产环境配置 ====================
+# 敏感信息通过环境变量注入，严禁在此填写明文密钥
+spring:
+  cloud:
+    nacos:
+      discovery:
+        server-addr: ${NACOS_SERVER_ADDR:127.0.0.1:8848}
+        namespace: ${NACOS_NAMESPACE}
+        username: ${NACOS_USERNAME}
+        password: ${NACOS_PASSWORD}
+    gateway:
+      routes:
+        - id: flash-api
+          uri: lb://flash-api
+          predicates:
+            - Path=/api/**
+        - id: flash-api-images
+          uri: lb://flash-api
+          predicates:
+            - Path=/images/**
+        - id: flash-admin
+          uri: lb://flash-admin
+          predicates:
+            - Path=/admin/**
+
+jwt:
+  secret: ${JWT_SECRET}
+  expiration: ${JWT_EXPIRATION:1800000}
+  refresh-expiration: ${JWT_REFRESH_EXPIRATION:604800000}
+
+logging:
+  level:
+    org.springframework.cloud.gateway: INFO

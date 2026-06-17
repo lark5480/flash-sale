@@ -1,0 +1,45 @@
+# ==================== 生产环境配置 ====================
+# 敏感信息通过环境变量注入，严禁在此填写明文密钥
+spring:
+  cloud:
+    nacos:
+      discovery:
+        server-addr: ${NACOS_SERVER_ADDR:127.0.0.1:8848}
+        namespace: ${NACOS_NAMESPACE}
+        username: ${NACOS_USERNAME}
+        password: ${NACOS_PASSWORD}
+  datasource:
+    url: ${DB_URL}
+    username: ${DB_USERNAME}
+    password: ${DB_PASSWORD}
+    driver-class-name: com.mysql.cj.jdbc.Driver
+    hikari:
+      maximum-pool-size: ${DB_POOL_MAX:50}
+      minimum-idle: ${DB_POOL_MIN:10}
+  data:
+    redis:
+      host: ${REDIS_HOST}
+      port: ${REDIS_PORT:6379}
+      password: ${REDIS_PASSWORD:}
+
+mybatis-plus:
+  configuration:
+    log-impl: org.apache.ibatis.logging.slf4j.Slf4jImpl
+
+jwt:
+  secret: ${JWT_SECRET}
+  expiration: ${JWT_EXPIRATION:1800000}
+  refresh-expiration: ${JWT_REFRESH_EXPIRATION:604800000}
+
+rocketmq:
+  name-server: ${ROCKETMQ_NAME_SERVER}
+  producer:
+    group: flash-api-producer-group
+    send-message-timeout: 10000
+  consumer:
+    group: flash-order-consumer-group
+
+flash:
+  flash:
+    consumer:
+      enabled: true

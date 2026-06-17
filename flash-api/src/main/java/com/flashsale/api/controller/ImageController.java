@@ -24,10 +24,15 @@ public class ImageController {
             }
             Resource resource = new UrlResource(path.toUri());
             String ct;
-            if (filename.endsWith(".png")) ct = "image/png";
-            else if (filename.endsWith(".jpg") || filename.endsWith(".jpeg")) ct = "image/jpeg";
-            else if (filename.endsWith(".webp")) ct = "image/webp";
-            else ct = "application/octet-stream";
+            if (filename.endsWith(".png")) {
+                ct = "image/png";
+            } else if (filename.endsWith(".jpg") || filename.endsWith(".jpeg")) {
+                ct = "image/jpeg";
+            } else if (filename.endsWith(".webp")) {
+                ct = "image/webp";
+            } else {
+                ct = "application/octet-stream";
+            }
             return ResponseEntity.ok()
                     .contentType(MediaType.parseMediaType(ct))
                     .contentLength(Files.size(path))
