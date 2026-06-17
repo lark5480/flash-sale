@@ -4,6 +4,10 @@ export function getMyOrders(page = 1, size = 10) {
   return request.get('/api/order/list', { params: { page, size } })
 }
 
+export function getOrderStatus(messageKey) {
+  return request.get('/api/order/status', { params: { messageKey } })
+}
+
 export function payOrder(id) {
   return request.post(`/api/order/${id}/pay`)
 }

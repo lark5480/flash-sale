@@ -58,17 +58,9 @@ async function fetchUsers() {
   loading.value = true
   try {
     const res = await getUsers({ page: page.value, size: size.value })
-    // 后端返回 List<UserVO>，不是 IPage
-    if (Array.isArray(res.data)) {
-      users.value = res.data
-      total.value = res.data.length >= size.value ? page.value * size.value + 1 : res.data.length
-    } else if (res.data && res.data.records) {
-      users.value = res.data.records
-      total.value = res.data.total || 0
-    } else {
-      users.value = []
-      total.value = 0
-    }
+    const data = res.data || {}
+    users.value = data.records || []
+    total.value = data.total || 0
   } catch (e) {
     ElMessage.error('获取用户列表失败')
   } finally {

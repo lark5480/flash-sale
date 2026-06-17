@@ -28,4 +28,10 @@ public final class RedisConstants {
 
     /** 秒杀缓存默认 TTL：秒杀活动结束后 1 小时自动过期 */
     public static final long FLASH_CACHE_TTL = 3600L;
+
+    /** 验证码 Redis Key 前缀，格式：captcha:{captchaId} */
+    public static final String CAPTCHA_KEY = "captcha:";
+
+    /** 验证码过期时间（秒）：5 分钟 */
+    public static final long CAPTCHA_TTL = 300L;
 }

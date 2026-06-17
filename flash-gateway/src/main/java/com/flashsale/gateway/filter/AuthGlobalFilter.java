@@ -20,7 +20,9 @@ public class AuthGlobalFilter implements GlobalFilter, Ordered {
             "/api/auth/register",
             "/api/auth/login",
             "/api/auth/refresh",
-            "/admin/auth/login"
+            "/api/auth/captcha",
+            "/admin/auth/login",
+            "/admin/auth/captcha"
     );
 
     private static final Set<String> SKIP_PREFIXES = Set.of(

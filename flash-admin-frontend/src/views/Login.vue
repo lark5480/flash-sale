@@ -24,6 +24,15 @@
           <el-form-item prop="password" label="密码">
             <el-input v-model="form.password" type="password" placeholder="请输入密码" :prefix-icon="Lock" size="large" show-password />
           </el-form-item>
+          <el-form-item label="验证码" prop="captchaAnswer">
+            <div class="captcha-row">
+              <el-input v-model="captchaAnswer" placeholder="请输入计算结果" size="large" autocomplete="off" />
+              <div class="captcha-img" @click="refreshCaptcha" title="点击刷新">
+                <div v-if="captchaSvg" v-html="captchaSvg"></div>
+                <span v-else style="display:flex;align-items:center;justify-content:center;width:160px;height:48px;font-size:12px;color:var(--color-text-muted);">加载中...</span>
+              </div>
+            </div>
+          </el-form-item>
           <el-form-item v-if="error">
             <el-alert :title="error" type="error" :closable="false" show-icon />
           </el-form-item>
@@ -39,7 +48,7 @@
 </template>
 
 <script setup>
-import { ref, reactive } from 'vue'
+import { ref, reactive, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { User, Lock } from '@element-plus/icons-vue'
 import { login } from '../api/auth'
@@ -56,21 +65,41 @@ const rules = {
   password: [{ required: true, message: '请输入密码', trigger: 'blur' }]
 }
 
+const captchaId = ref('')
+const captchaSvg = ref('')
+const captchaAnswer = ref('')
+
+async function refreshCaptcha() {
+  try {
+    const res = await fetch('/admin/auth/captcha')
+    const json = await res.json()
+    if (json.code === 200) {
+      captchaId.value = json.data.captchaId
+      captchaSvg.value = json.data.svg
+    }
+  } catch (e) { /* ignore */ }
+}
+
 async function handleLogin() {
   const valid = await formRef.value.validate().catch(() => false)
   if (!valid) return
   error.value = ''
   loading.value = true
   try {
-    const res = await login(form.username, form.password)
+    const res = await login(form.username, form.password, captchaId.value, captchaAnswer.value)
     localStorage.setItem('adminToken', res.data.accessToken)
     router.push('/')
   } catch (e) {
     error.value = e.response?.data?.msg || e.message || '登录失败'
+    refreshCaptcha()
   } finally {
     loading.value = false
   }
 }
+
+onMounted(() => {
+  refreshCaptcha()
+})
 </script>
 
 <style scoped>
@@ -205,5 +234,25 @@ async function handleLogin() {
 }
 :deep(.el-input.is-focus .el-input__prefix) {
   color: var(--color-accent) !important;
+}
+
+/* ===== Captcha ===== */
+.captcha-row {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  width: 100%;
+}
+.captcha-img {
+  flex-shrink: 0;
+  cursor: pointer;
+  border-radius: var(--radius-md);
+  overflow: hidden;
+  border: 1px solid rgba(255,255,255,0.08);
+  transition: all 0.15s ease;
+  line-height: 0;
+}
+.captcha-img:hover {
+  border-color: var(--color-accent);
 }
 </style>

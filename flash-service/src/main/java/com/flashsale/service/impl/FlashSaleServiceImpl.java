@@ -67,6 +67,9 @@ public class FlashSaleServiceImpl implements FlashSaleService {
             throw new BusinessException(ResultCode.NOT_FOUND, "flash sale not found");
         }
         flashSaleMapper.updateById(flashSale);
+        // 删除 Redis 缓存，下次 purchase 时从 DB 重新加载
+        stringRedisTemplate.delete(RedisConstants.FLASH_STOCK_KEY + flashSale.getId());
+        stringRedisTemplate.delete(RedisConstants.FLASH_SALE_KEY + flashSale.getId());
         log.info("[秒杀活动] 更新成功, id={}", flashSale.getId());
         return flashSale;
     }
@@ -78,6 +81,8 @@ public class FlashSaleServiceImpl implements FlashSaleService {
             throw new BusinessException(ResultCode.NOT_FOUND, "flash sale not found");
         }
         flashSaleMapper.deleteById(id);
+        stringRedisTemplate.delete(RedisConstants.FLASH_STOCK_KEY + id);
+        stringRedisTemplate.delete(RedisConstants.FLASH_SALE_KEY + id);
         log.info("[秒杀活动] 删除成功, id={}", id);
     }
 
