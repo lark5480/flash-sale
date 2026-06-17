@@ -1,5 +1,6 @@
 package com.flashsale.admin.controller;
 
+import com.flashsale.common.annotation.RateLimit;
 import com.flashsale.common.result.ResultVO;
 import com.flashsale.model.dto.LoginDTO;
 import com.flashsale.model.vo.LoginVO;
@@ -21,6 +22,7 @@ public class AuthController {
         this.userService = userService;
     }
 
+    @RateLimit(key = "admin-login", permits = 3, windowSeconds = 60)
     @PostMapping("/login")
     public ResultVO<LoginVO> login(@Valid @RequestBody LoginDTO loginDTO) {
         UserVO userVO = userService.getUserByUsername(loginDTO.getUsername());

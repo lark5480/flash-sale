@@ -44,6 +44,12 @@ public interface FlashOrderService {
     /** 用户退款自己的已支付订单并归还库存 */
     void refundOrder(Long orderId, Long userId);
 
+    /** 管理端删除已取消订单 */
+    void deleteOrder(Long orderId);
+
+    /** 用户删除自己的已取消订单 */
+    void deleteOrder(Long orderId, Long userId);
+
     /**
      * 事务性扣减库存 + 创建订单（供 MQ Consumer 调用）
      * <p>

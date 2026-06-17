@@ -15,3 +15,7 @@ export function payOrder(id) {
 export function refundOrder(id) {
   return request.post(`/admin/order/${id}/refund`)
 }
+
+export function deleteOrder(id) {
+  return request.delete(`/admin/order/${id}`)
+}

@@ -353,6 +353,35 @@ public class FlashOrderServiceImpl implements FlashOrderService {
                 orderId, order.getFlashSaleId(), userId);
     }
 
+    @Override
+    public void deleteOrder(Long orderId) {
+        FlashOrder order = flashOrderMapper.selectById(orderId);
+        if (order == null) {
+            throw new BusinessException(ResultCode.NOT_FOUND, "订单不存在");
+        }
+        if (!order.getStatus().equals(OrderStatusEnum.CANCELLED.getCode())) {
+            throw new BusinessException(ResultCode.BAD_REQUEST, "仅已取消订单可删除");
+        }
+        flashOrderMapper.deleteById(orderId);
+        log.info("[删除] 管理端删除已取消订单, orderId={}", orderId);
+    }
+
+    @Override
+    public void deleteOrder(Long orderId, Long userId) {
+        FlashOrder order = flashOrderMapper.selectById(orderId);
+        if (order == null) {
+            throw new BusinessException(ResultCode.NOT_FOUND, "订单不存在");
+        }
+        if (!order.getUserId().equals(userId)) {
+            throw new BusinessException(ResultCode.FORBIDDEN, "无权操作此订单");
+        }
+        if (!order.getStatus().equals(OrderStatusEnum.CANCELLED.getCode())) {
+            throw new BusinessException(ResultCode.BAD_REQUEST, "仅已取消订单可删除");
+        }
+        flashOrderMapper.deleteById(orderId);
+        log.info("[删除] 用户删除已取消订单, orderId={}, userId={}", orderId, userId);
+    }
+
     /**
      * 事务性扣减库存 + 创建订单（供 MQ Consumer 调用）
      * <p>
