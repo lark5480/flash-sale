@@ -22,6 +22,7 @@ import org.slf4j.LoggerFactory;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.data.redis.core.script.DefaultRedisScript;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 
 import java.time.LocalDateTime;
 import java.util.List;
@@ -192,20 +193,19 @@ public class FlashOrderServiceImpl implements FlashOrderService {
     }
 
     /**
-     * 确保 Redis 库存缓存存在且有效
+     * 确保 Redis 库存缓存存在
      * <p>
-     * 场景：
-     * 1. Key 不存在 → 从 DB 加载
-     * 2. Key 存在但值 ≤ 0 → 可能是上次 MQ 失败残留，重新从 DB 加载
+     * 仅在 Key 不存在时从 DB 加载。不根据值判断，
+     * 因为 stock=0 是合法的售罄状态，重新加载会导致超卖。
      */
     private void ensureRedisStock(FlashSale flashSale) {
         String stockKey = RedisConstants.FLASH_STOCK_KEY + flashSale.getId();
-        String stock = stringRedisTemplate.opsForValue().get(stockKey);
-        if (stock != null && Long.parseLong(stock) > 0) {
+        Boolean hasKey = stringRedisTemplate.hasKey(stockKey);
+        if (Boolean.TRUE.equals(hasKey)) {
             return;
         }
-        log.info("[缓存补充] Redis 库存异常（key={}, val={}），从 DB 重新加载, flashSaleId={}",
-                stock != null, stock, flashSale.getId());
+        log.info("[缓存补充] Redis 库存 Key 不存在，从 DB 加载, flashSaleId={}, stock={}",
+                flashSale.getId(), flashSale.getStock());
         stringRedisTemplate.opsForValue().set(stockKey,
                 String.valueOf(flashSale.getStock()),
                 RedisConstants.FLASH_CACHE_TTL,
@@ -222,6 +222,7 @@ public class FlashOrderServiceImpl implements FlashOrderService {
     }
 
     @Override
+    @Transactional(rollbackFor = Exception.class)
     public void cancelOrderAndRestoreStock(FlashOrder order) {
         // 1. 标记订单为已取消
         order.setStatus(OrderStatusEnum.CANCELLED.getCode());
@@ -275,6 +276,7 @@ public class FlashOrderServiceImpl implements FlashOrderService {
     }
 
     @Override
+    @Transactional(rollbackFor = Exception.class)
     public void cancelOrder(Long orderId, Long userId) {
         FlashOrder order = flashOrderMapper.selectById(orderId);
         if (order == null) {
@@ -291,6 +293,7 @@ public class FlashOrderServiceImpl implements FlashOrderService {
     }
 
     @Override
+    @Transactional(rollbackFor = Exception.class)
     public void refundOrder(Long orderId) {
         FlashOrder order = flashOrderMapper.selectById(orderId);
         if (order == null) {
@@ -319,6 +322,7 @@ public class FlashOrderServiceImpl implements FlashOrderService {
     }
 
     @Override
+    @Transactional(rollbackFor = Exception.class)
     public void refundOrder(Long orderId, Long userId) {
         FlashOrder order = flashOrderMapper.selectById(orderId);
         if (order == null) {
@@ -347,5 +351,65 @@ public class FlashOrderServiceImpl implements FlashOrderService {
 
         log.info("[退款] 用户退款成功, orderId={}, flashSaleId={}, userId={}",
                 orderId, order.getFlashSaleId(), userId);
+    }
+
+    @Override
+    public void deleteOrder(Long orderId) {
+        FlashOrder order = flashOrderMapper.selectById(orderId);
+        if (order == null) {
+            throw new BusinessException(ResultCode.NOT_FOUND, "订单不存在");
+        }
+        if (!order.getStatus().equals(OrderStatusEnum.CANCELLED.getCode())) {
+            throw new BusinessException(ResultCode.BAD_REQUEST, "仅已取消订单可删除");
+        }
+        flashOrderMapper.deleteById(orderId);
+        log.info("[删除] 管理端删除已取消订单, orderId={}", orderId);
+    }
+
+    @Override
+    public void deleteOrder(Long orderId, Long userId) {
+        FlashOrder order = flashOrderMapper.selectById(orderId);
+        if (order == null) {
+            throw new BusinessException(ResultCode.NOT_FOUND, "订单不存在");
+        }
+        if (!order.getUserId().equals(userId)) {
+            throw new BusinessException(ResultCode.FORBIDDEN, "无权操作此订单");
+        }
+        if (!order.getStatus().equals(OrderStatusEnum.CANCELLED.getCode())) {
+            throw new BusinessException(ResultCode.BAD_REQUEST, "仅已取消订单可删除");
+        }
+        flashOrderMapper.deleteById(orderId);
+        log.info("[删除] 用户删除已取消订单, orderId={}, userId={}", orderId, userId);
+    }
+
+    /**
+     * 事务性扣减库存 + 创建订单（供 MQ Consumer 调用）
+     * <p>
+     * 在同一事务内执行 deductStock 和 INSERT order，
+     * 要么同时成功，要么同时回滚，避免库存丢失。
+     * messageKey 的 UNIQUE 索引提供 DB 级幂等兜底。
+     */
+    @Override
+    @Transactional(rollbackFor = Exception.class)
+    public FlashOrder deductStockAndCreateOrder(Long flashSaleId, FlashOrder order) {
+        // DB 级幂等：messageKey 已存在则跳过
+        FlashOrder existing = flashOrderMapper.selectByMessageKey(order.getMessageKey());
+        if (existing != null) {
+            log.warn("[异步下单] DB 幂等命中，messageKey={} 已存在, orderId={}",
+                    order.getMessageKey(), existing.getId());
+            return null;
+        }
+
+        // 乐观锁扣库存
+        int updated = flashSaleMapper.deductStock(flashSaleId);
+        if (updated == 0) {
+            throw new BusinessException(ResultCode.FLASH_SOLD_OUT, "DB 库存不足");
+        }
+
+        // 创建订单（同一事务，失败则 deductStock 一并回滚）
+        flashOrderMapper.insert(order);
+        log.info("[异步下单] 事务提交: deductStock + createOrder, orderId={}, messageKey={}",
+                order.getId(), order.getMessageKey());
+        return order;
     }
 }

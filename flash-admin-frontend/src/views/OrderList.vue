@@ -42,7 +42,14 @@
           >
             退款
           </el-button>
-          <span v-if="row.status !== 0 && row.status !== 1" class="text-muted">-</span>
+          <el-button
+            v-if="row.status === 2"
+            size="small" type="danger" link
+            @click="handleDelete(row)"
+          >
+            删除
+          </el-button>
+          <span v-if="row.status === 3" class="text-muted">-</span>
         </template>
       </el-table-column>
     </el-table>
@@ -61,7 +68,7 @@
 
 <script setup>
 import { ref, onMounted } from 'vue'
-import { getOrders, payOrder, refundOrder } from '../api/order'
+import { getOrders, payOrder, refundOrder, deleteOrder } from '../api/order'
 import { ElMessage, ElMessageBox } from 'element-plus'
 
 const orders = ref([])
@@ -133,6 +140,23 @@ async function handleRefund(row) {
   } catch (e) {
     if (e !== 'cancel') {
       ElMessage.error(e.response?.data?.msg || '退款失败')
+    }
+  }
+}
+
+async function handleDelete(row) {
+  try {
+    await ElMessageBox.confirm(
+      `确定删除订单 #${row.id} 吗？仅已取消订单可删除。`,
+      '确认删除',
+      { confirmButtonText: '确定', cancelButtonText: '取消', type: 'warning' }
+    )
+    await deleteOrder(row.id)
+    ElMessage.success('删除成功')
+    await fetchOrders()
+  } catch (e) {
+    if (e !== 'cancel') {
+      ElMessage.error(e.response?.data?.msg || '删除失败')
     }
   }
 }

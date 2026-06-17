@@ -1,5 +1,6 @@
 package com.flashsale.api.controller;
 
+import com.flashsale.common.annotation.RateLimit;
 import com.flashsale.common.result.ResultVO;
 import com.flashsale.model.dto.LoginDTO;
 import com.flashsale.model.dto.RegisterDTO;
@@ -23,12 +24,14 @@ public class AuthController {
         this.userService = userService;
     }
 
+    @RateLimit(key = "register", permits = 3, windowSeconds = 60)
     @PostMapping("/register")
     public ResultVO<UserVO> register(@Valid @RequestBody RegisterDTO registerDTO) {
         UserVO userVO = userService.register(registerDTO);
         return ResultVO.success(userVO);
     }
 
+    @RateLimit(key = "login", permits = 5, windowSeconds = 60)
     @PostMapping("/login")
     public ResultVO<LoginVO> login(@Valid @RequestBody LoginDTO loginDTO) {
         LoginVO loginVO = userService.login(loginDTO);

@@ -4,6 +4,7 @@ import com.baomidou.mybatisplus.core.metadata.IPage;
 import com.flashsale.common.result.ResultVO;
 import com.flashsale.model.entity.FlashOrder;
 import com.flashsale.service.FlashOrderService;
+import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -41,6 +42,12 @@ public class OrderController {
     @PostMapping("/{id}/refund")
     public ResultVO<Void> refund(@PathVariable Long id) {
         flashOrderService.refundOrder(id);
+        return ResultVO.success();
+    }
+
+    @DeleteMapping("/{id}")
+    public ResultVO<Void> deleteOrder(@PathVariable Long id) {
+        flashOrderService.deleteOrder(id);
         return ResultVO.success();
     }
 }

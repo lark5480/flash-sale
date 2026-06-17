@@ -1,0 +1,43 @@
+# ==================== 开发环境配置 ====================
+spring:
+  cloud:
+    nacos:
+      discovery:
+        server-addr: 127.0.0.1:8848
+        namespace: 4b56aa8f-8ca1-484a-9189-607d0fd733ab
+        username: nacos
+        password: nacos
+  datasource:
+    url: jdbc:mysql://127.0.0.1:3306/flash_sale?useUnicode=true&characterEncoding=UTF-8&serverTimezone=Asia/Shanghai&useSSL=false
+    username: root
+    password: root123
+    driver-class-name: com.mysql.cj.jdbc.Driver
+    hikari:
+      maximum-pool-size: 20
+      minimum-idle: 5
+  data:
+    redis:
+      host: 127.0.0.1
+      port: 6379
+
+mybatis-plus:
+  configuration:
+    log-impl: org.apache.ibatis.logging.stdout.StdOutImpl
+
+jwt:
+  secret: flash-sale-secret-key-min-256-bits-long-for-hs256
+  expiration: 1800000
+  refresh-expiration: 604800000
+
+rocketmq:
+  name-server: 127.0.0.1:9876
+  producer:
+    group: flash-api-producer-group
+    send-message-timeout: 10000
+  consumer:
+    group: flash-order-consumer-group
+
+flash:
+  flash:
+    consumer:
+      enabled: true

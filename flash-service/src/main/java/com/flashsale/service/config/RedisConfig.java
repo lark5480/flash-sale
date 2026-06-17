@@ -50,4 +50,16 @@ public class RedisConfig {
         script.setResultType(Long.class);
         return script;
     }
+
+    /**
+     * 滑动窗口限流 Lua 脚本 Bean
+     * ZSET 记录请求时间戳，窗口外的自动清理
+     */
+    @Bean
+    public DefaultRedisScript<Long> rateLimitScript() {
+        DefaultRedisScript<Long> script = new DefaultRedisScript<>();
+        script.setLocation(new ClassPathResource("scripts/rate_limit.lua"));
+        script.setResultType(Long.class);
+        return script;
+    }
 }

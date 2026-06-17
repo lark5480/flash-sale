@@ -4,33 +4,5 @@ server:
 spring:
   application:
     name: flash-gateway
-  cloud:
-    nacos:
-      discovery:
-        server-addr: 127.0.0.1:8848
-        namespace: 4b56aa8f-8ca1-484a-9189-607d0fd733ab
-        username: nacos
-        password: nacos
-    gateway:
-      routes:
-        - id: flash-api
-          uri: lb://flash-api
-          predicates:
-            - Path=/api/**
-        - id: flash-api-images
-          uri: lb://flash-api
-          predicates:
-            - Path=/images/**
-        - id: flash-admin
-          uri: lb://flash-admin
-          predicates:
-            - Path=/admin/**
-
-jwt:
-  secret: flash-sale-secret-key-min-256-bits-long-for-hs256
-  expiration: 1800000
-  refresh-expiration: 604800000
-
-logging:
-  level:
-    org.springframework.cloud.gateway: DEBUG
+  profiles:
+    active: ${SPRING_PROFILES_ACTIVE:dev}

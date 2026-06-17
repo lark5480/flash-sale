@@ -77,6 +77,11 @@
               申请退款
             </button>
           </div>
+          <div class="order-actions" v-if="order.status === 2">
+            <button class="action-btn delete-btn" @click="handleDelete(order)" :disabled="order._loading">
+              删除订单
+            </button>
+          </div>
         </div>
 
         <!-- Pagination -->
@@ -105,7 +110,7 @@
 <script setup>
 import { ref, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
-import { getMyOrders, payOrder, cancelOrder, refundOrder } from '../api/order'
+import { getMyOrders, payOrder, cancelOrder, refundOrder, deleteOrder } from '../api/order'
 import { useToast } from '../composables/useToast'
 import { useConfirm } from '../composables/useConfirm'
 
@@ -208,6 +213,21 @@ async function handleRefund(order) {
     toast.success('退款成功')
   } catch (e) {
     toast.error(e.response?.data?.msg || e.message || '退款失败')
+  } finally {
+    order._loading = false
+  }
+}
+
+async function handleDelete(order) {
+  const ok = await confirm('确定要删除该订单吗？')
+  if (!ok) return
+  order._loading = true
+  try {
+    await deleteOrder(order.id)
+    await fetchOrders(currentPage.value)
+    toast.success('订单已删除')
+  } catch (e) {
+    toast.error(e.response?.data?.msg || e.message || '删除失败')
   } finally {
     order._loading = false
   }
@@ -382,6 +402,8 @@ onMounted(() => {
 .cancel-btn:hover:not(:disabled) { border-color: var(--color-danger); color: var(--color-danger); }
 .refund-btn { background: rgba(96,165,250,0.1); color: var(--color-info); border: 1px solid rgba(96,165,250,0.15); }
 .refund-btn:hover:not(:disabled) { background: rgba(96,165,250,0.18); }
+.delete-btn { background: transparent; color: var(--color-text-muted); border: 1px solid rgba(255,255,255,0.08); }
+.delete-btn:hover:not(:disabled) { border-color: var(--color-danger); color: var(--color-danger); }
 
 /* ===== Pagination ===== */
 .pagination {

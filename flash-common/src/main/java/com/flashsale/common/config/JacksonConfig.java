@@ -20,11 +20,11 @@ public class JacksonConfig {
     @Bean
     public ObjectMapper objectMapper() {
         JavaTimeModule javaTimeModule = new JavaTimeModule();
+        DateTimeFormatter formatter = DateTimeFormatter.ofPattern(DATE_TIME_PATTERN);
         javaTimeModule.addSerializer(LocalDateTime.class,
-                new LocalDateTimeSerializer(DateTimeFormatter.ofPattern(DATE_TIME_PATTERN)));
-        // use ISO deserializer which accepts both T and space separator
+                new LocalDateTimeSerializer(formatter));
         javaTimeModule.addDeserializer(LocalDateTime.class,
-                new LocalDateTimeDeserializer(DateTimeFormatter.ISO_LOCAL_DATE_TIME));
+                new LocalDateTimeDeserializer(formatter));
 
         ObjectMapper objectMapper = new ObjectMapper();
         objectMapper.registerModule(javaTimeModule);

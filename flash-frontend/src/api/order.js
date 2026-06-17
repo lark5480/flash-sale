@@ -15,3 +15,7 @@ export function cancelOrder(id) {
 export function refundOrder(id) {
   return request.post(`/api/order/${id}/refund`)
 }
+
+export function deleteOrder(id) {
+  return request.delete(`/api/order/${id}`)
+}

@@ -1,11 +1,13 @@
 package com.flashsale.api.controller;
 
 import com.baomidou.mybatisplus.core.metadata.IPage;
+import com.flashsale.common.annotation.RateLimit;
 import com.flashsale.common.result.ResultVO;
 import com.flashsale.model.entity.FlashOrder;
 import com.flashsale.model.vo.FlashOrderVO;
 import com.flashsale.service.FlashOrderService;
 import org.springframework.security.core.Authentication;
+import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -33,6 +35,7 @@ public class FlashOrderController {
      * <p>
      * 返回 messageKey 供客户端轮询订单状态
      */
+    @RateLimit(key = "purchase", permits = 5, windowSeconds = 5)
     @PostMapping("/flash-sale/{flashSaleId}/purchase")
     public ResultVO<Map<String, Object>> purchase(@PathVariable Long flashSaleId, Authentication auth) {
         Long userId = (Long) auth.getPrincipal();
@@ -91,6 +94,13 @@ public class FlashOrderController {
     public ResultVO<Void> refund(@PathVariable Long id, Authentication auth) {
         Long userId = (Long) auth.getPrincipal();
         flashOrderService.refundOrder(id, userId);
+        return ResultVO.success();
+    }
+
+    @DeleteMapping("/order/{id}")
+    public ResultVO<Void> deleteOrder(@PathVariable Long id, Authentication auth) {
+        Long userId = (Long) auth.getPrincipal();
+        flashOrderService.deleteOrder(id, userId);
         return ResultVO.success();
     }
 }

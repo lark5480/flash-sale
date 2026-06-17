@@ -12,6 +12,7 @@ public class FlashOrder extends BaseEntity {
     private Long itemId;
     private Long flashSaleId;
     private BigDecimal flashPrice;
+    private String messageKey;
     private Integer status;
 
     public Long getUserId() {
@@ -44,6 +45,14 @@ public class FlashOrder extends BaseEntity {
 
     public void setFlashPrice(BigDecimal flashPrice) {
         this.flashPrice = flashPrice;
+    }
+
+    public String getMessageKey() {
+        return messageKey;
+    }
+
+    public void setMessageKey(String messageKey) {
+        this.messageKey = messageKey;
     }
 
     public Integer getStatus() {
