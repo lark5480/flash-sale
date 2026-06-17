@@ -84,6 +84,8 @@ graph TB
 - `ResultVO` / `ResultCode` — 统一响应封装
 - `BaseEntity` — 实体基类（id, createTime, updateTime）
 - `JwtUtil` — JWT 令牌工具类
+- `PasswordUtil` — BCrypt 密码加密
+- `RateLimit` — 接口限流注解
 - 全局异常与异常处理器
 - 常量类：`RedisConstants`、`RocketMQConstants`
 
@@ -111,23 +113,29 @@ MyBatis-Plus Mapper 接口。
 - **配置类**：`RedisConfig`、`AsyncConfig`、`MyBatisPlusConfig`
 - **DataInitRunner** — 应用启动时初始化数据的钩子
 - **FlashOrderProducer** — 秒杀下单消息生产者（syncSend 同步发送）
-- **FlashOrderConsumer** — 秒杀下单消息消费者（幂等校验 + 分布式锁 + 扣库存 + 创建订单）
+- **RateLimitInterceptor** — 接口限流拦截器（Redis ZSET 滑动窗口）
+- **CaptchaService** — 算术验证码服务（生成 + 校验，Redis 存储，一次性消费）
+- **FlashOrderConsumer** — 秒杀下单消息消费者（三重幂等 + 分布式锁 + 事务扣库存+创建订单，BusinessException 吞没、系统异常 re-throw）
 
 ### flash-api（用户端 API，端口 8081）
 
 面向 C 端用户的 REST 接口。
 
-- `AuthController` — 用户注册、登录、刷新 Token
-- `FlashSaleController` — 秒杀活动列表、详情、抢购下单
-- `FlashOrderController` — 订单状态轮询、订单列表
+- `AuthController` — 用户注册、登录、刷新 Token、获取验证码
+- `FlashSaleController` — 秒杀活动列表、详情、抢购下单（需验证码）
+- `FlashOrderController` — 下单、订单状态轮询、订单列表、支付、取消、退款、删除
 - `ItemController` — 商品信息查询
+- `CaptchaController` — 生成算术验证码
+- `WebMvcConfig` — 注册 RateLimitInterceptor
 
 ### flash-admin（管理端 API，端口 8082）
 
 面向运营管理人员的后台 REST 接口。
 
-- `AdminAuthController` — 管理员登录
+- `AdminAuthController` — 管理员登录（需验证码）
 - 商品 / 秒杀活动 / 订单 / 用户 的 CRUD 管理
+- `CaptchaController` — 生成算术验证码
+- `WebMvcConfig` — 注册 RateLimitInterceptor
 - **定时任务调度器**：`FlashSaleScheduler`、`OrderScheduler`（详见第 5 节）
 
 ### flash-gateway（网关，端口 8080）
@@ -139,6 +147,7 @@ MyBatis-Plus Mapper 接口。
 - 路由规则：
   - `/api/**` → `flash-api`（lb://flash-api）
   - `/admin/**` → `flash-admin`（lb://flash-admin）
+  - `/images/**` → `flash-api`（静态图片资源）
 
 ---
 
@@ -259,11 +268,13 @@ sequenceDiagram
 
 | Key 格式 | 用途 | TTL |
 |----------|------|-----|
-| `flash:stock:{flashSaleId}` | 秒杀库存计数器（Lua 脚本原子操作） | 活动结束后清理 |
-| `flash:user:purchased:{flashSaleId}:{userId}` | 用户购买次数计数，防止超限购 | 活动结束后清理 |
+| `flash:stock:{flashSaleId}` | 秒杀库存计数器（Lua 脚本原子操作） | 3600s |
+| `flash:sale:{flashSaleId}` | 活动详情缓存，减少 DB 查询 | 3600s |
+| `flash:user:purchased:{flashSaleId}:{userId}` | 用户购买次数计数，防止超限购 | 3600s |
 | `flash:lock:{flashSaleId}` | Redisson 分布式锁，保证消费者同一活动串行处理库存 | 锁自动续期（watchdog） |
-| `flash:msg:processed:{messageKey}` | MQ 消息幂等标记（SETNX 写入，值为 DONE 表示已处理） | 3600s |
-| `flash:cache:detail:{flashSaleId}` | 活动详情缓存，减少 DB 查询 | 活动维度，手动清理 |
+| `flash:msg:processed:{messageKey}` | MQ 消息幂等标记（SETNX 写入） | `MSG_PROCESSED_TTL` |
+| `rate:limit:{key}:{userId\|ip:xxx}` | 接口限流滑动窗口（ZSET） | window + 1s |
+| `flash:captcha:{captchaId}` | 算术验证码答案 | 180s |
 
 ---
 
@@ -297,6 +308,28 @@ X-User-Role: USER
 ```
 
 下游 Controller 通过 `@RequestHeader("X-User-Id")` 获取当前用户标识，无需重复解析 Token。
+
+### 验证码机制
+
+登录和秒杀下单需验证码校验（`CaptchaService`）：
+
+- **生成**：随机算术题（a + b / a - b / a × b），答案存入 Redis `flash:captcha:{uuid}`，TTL 180s
+- **校验**：比对用户输入与 Redis 中的答案，**无论对错都删除 key**（一次性消费）
+- **端点**：`GET /api/auth/captcha`、`GET /admin/auth/captcha`
+
+### 接口限流
+
+基于 `@RateLimit` 注解 + `RateLimitInterceptor` + Redis ZSET 滑动窗口：
+
+| 接口 | 限制 |
+|------|------|
+| 秒杀下单 | 5 次 / 5 秒 |
+| C 端登录 | 5 次 / 60 秒 |
+| 注册 | 3 次 / 60 秒 |
+| 管理端登录 | 3 次 / 60 秒 |
+
+超限返回 HTTP 429 + `ResultCode.RATE_LIMITED(50007)`。
+未认证接口用客户端 IP 限流，已认证接口用 userId 限流。
 
 ---
 

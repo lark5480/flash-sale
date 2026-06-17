@@ -82,6 +82,8 @@ com.flashsale
 │   ├── constant                    # 常量定义
 │   │   ├── RedisConstants          # Redis Key 与 TTL 常量
 │   │   └── RocketMQConstants       # RocketMQ Topic/Tag/Group 常量
+│   ├── annotation
+│   │   └── RateLimit               # 接口限流注解
 │   └── enums
 │       └── StatusEnum              # 通用状态枚举
 │
@@ -126,6 +128,8 @@ com.flashsale
 │   │   └── DataInitRunner          # 启动数据初始化
 │   ├── filter
 │   │   └── JwtAuthenticationFilter # Spring Security JWT 过滤器
+│   ├── interceptor
+│   │   └── RateLimitInterceptor    # 接口限流拦截器（Redis 滑动窗口）
 │   ├── producer
 │   │   └── FlashOrderProducer      # RocketMQ 消息生产者
 │   ├── consumer
@@ -134,19 +138,27 @@ com.flashsale
 │       └── FlashOrderMessage       # MQ 消息体定义
 │
 ├── api                             # flash-api 模块
-│   └── controller
-│       ├── AuthController          # /api/auth/**（注册、登录、刷新 Token）
-│       ├── ItemController          # /api/item/**（商品列表、详情）
-│       ├── FlashSaleController     # /api/flash-sale/**（活动列表、详情）
-│       └── FlashOrderController    # /api/order/**（下单、支付、取消、状态轮询）
+│   ├── controller
+│   │   ├── AuthController          # /api/auth/**（注册、登录、刷新 Token、验证码）
+│   │   ├── CaptchaController       # /api/auth/captcha（生成算术验证码）
+│   │   ├── ItemController          # /api/item/**（商品列表、详情）
+│   │   ├── FlashSaleController     # /api/flash-sale/**（活动列表、详情）
+│   │   └── FlashOrderController    # /api/order/**（下单、支付、取消、退款、删除、状态轮询）
+│   └── config
+│       ├── ApiSecurityConfig       # C 端 Spring Security 配置
+│       └── WebMvcConfig            # 注册 RateLimitInterceptor
 │
 ├── admin                           # flash-admin 模块
 │   ├── controller
-│   │   ├── AuthController          # /admin/auth/**（管理员登录）
+│   │   ├── AuthController          # /admin/auth/**（管理员登录，需验证码）
+│   │   ├── CaptchaController       # /admin/auth/captcha（生成算术验证码）
 │   │   ├── ItemController          # /admin/item/**（商品 CRUD）
 │   │   ├── FlashSaleController     # /admin/flash-sale/**（活动 CRUD + 状态变更）
-│   │   ├── OrderController         # /admin/order/**（订单查看、支付、退款）
-│   │   └── UserController          # /admin/user/**（用户管理）
+│   │   ├── OrderController         # /admin/order/**（订单查看、支付、退款、删除）
+│   │   └── UserController          # /admin/user/**（用户管理，分页）
+│   ├── config
+│   │   ├── AdminSecurityConfig     # B 端 Spring Security 配置（仅 ADMIN 角色）
+│   │   └── WebMvcConfig            # 注册 RateLimitInterceptor
 │   └── scheduler
 │       ├── FlashSaleScheduler      # 秒杀活动状态自动流转（每分钟）
 │       └── OrderScheduler          # 超时未支付订单自动取消（每 5 分钟）
@@ -170,18 +182,21 @@ com.flashsale
 | Method | Path | 说明 | 需要认证 |
 |--------|------|------|----------|
 | POST | `/api/auth/register` | 用户注册 | 否 |
-| POST | `/api/auth/login` | 用户登录，返回 accessToken 和 refreshToken | 否 |
+| POST | `/api/auth/login` | 用户登录（需验证码），返回 accessToken 和 refreshToken | 否 |
 | POST | `/api/auth/refresh?refreshToken=` | 刷新 Token | 否 |
+| GET | `/api/auth/captcha` | 获取算术验证码（返回 captchaId + 表达式） | 否 |
 | GET | `/api/item/list?page=1&size=10` | 商品列表（分页） | 是 |
 | GET | `/api/item/{id}` | 商品详情 | 是 |
 | GET | `/api/flash-sale/active` | 当前进行中的秒杀活动列表 | 是 |
 | GET | `/api/flash-sale/{id}` | 秒杀活动详情（含关联商品信息） | 是 |
-| POST | `/api/flash-sale/{id}/purchase` | 秒杀下单，返回 messageKey | 是 |
+| POST | `/api/flash-sale/{id}/purchase` | 秒杀下单（需验证码），返回 messageKey | 是 |
 | GET | `/api/order/status?messageKey=` | 轮询订单异步处理状态（PROCESSING / DONE） | 是 |
 | GET | `/api/order/list?page=1&size=10` | 我的订单列表（分页） | 是 |
 | GET | `/api/order/{id}` | 订单详情 | 是 |
 | POST | `/api/order/{id}/pay` | 支付订单 | 是 |
 | POST | `/api/order/{id}/cancel` | 取消订单 | 是 |
+| POST | `/api/order/{id}/refund` | 退款 | 是 |
+| DELETE | `/api/order/{id}` | 删除已取消订单 | 是 |
 
 **秒杀下单流程：**
 
@@ -198,7 +213,8 @@ com.flashsale
 
 | Method | Path | 说明 |
 |--------|------|------|
-| POST | `/admin/auth/login` | 管理员登录（校验 role=ADMIN） |
+| POST | `/admin/auth/login` | 管理员登录（需验证码，校验 role=ADMIN） |
+| GET | `/admin/auth/captcha` | 获取算术验证码 |
 | GET | `/admin/item/list?page=1&size=10` | 商品列表（分页） |
 | GET | `/admin/item/{id}` | 商品详情 |
 | POST | `/admin/item` | 创建商品 |
@@ -214,6 +230,7 @@ com.flashsale
 | GET | `/admin/order/{id}` | 订单详情 |
 | POST | `/admin/order/{id}/pay` | 确认支付 |
 | POST | `/admin/order/{id}/refund` | 退款 |
+| DELETE | `/admin/order/{id}` | 删除已取消订单 |
 | GET | `/admin/user/list?page=1&size=10` | 用户列表 |
 | PUT | `/admin/user/{id}/status` | 启用/禁用用户 |
 
@@ -398,6 +415,8 @@ Lua 脚本执行成功后 Redis 状态已变更（库存 -1，用户计数 +1）
 | `flash:user:purchased:{flashSaleId}:{userId}` | 用户已购数量 | `RedisConstants.FLASH_USER_PURCHASED_KEY` |
 | `flash:lock:{flashSaleId}` | Redisson 分布式锁 | `RedisConstants.FLASH_LOCK_KEY` |
 | `flash:msg:processed:{messageKey}` | MQ 消息幂等记录 | `RocketMQConstants.MSG_PROCESSED_KEY` |
+| `rate:limit:{key}:{userId\|ip:xxx}` | 接口限流滑动窗口（ZSET） | `RateLimitInterceptor` |
+| `flash:captcha:{captchaId}` | 算术验证码答案 | `RedisConstants.CAPTCHA_KEY` |
 
 ---
 
@@ -430,16 +449,21 @@ public class FlashOrderMessage implements Serializable {
 ```
 收到消息
   │
-  ├── 1. 幂等校验：Redis SETNX flash:msg:processed:{messageKey}（TTL 3600 秒）
+  ├── 1. Redis 幂等校验：SETNX flash:msg:processed:{messageKey}
   │      └── 已处理 → 跳过
   │
-  ├── 2. 获取 Redisson 分布式锁：flash:lock:{flashSaleId}（最长持有 10 秒）
+  ├── 2. DB 幂等校验：FlashOrderMapper.selectByMessageKey()
+  │      └── 已存在 → 跳过（Redis key 被驱逐时的兜底）
   │
-  ├── 3. DB 乐观锁扣库存：FlashSaleMapper.deductStock()
-  │      └── 失败 → 记录错误日志并返回
+  ├── 3. Redisson 分布式锁：flash:lock:{flashSaleId}（最长持有 10 秒）
   │
-  └── 4. 创建订单：FlashOrderMapper.insert()
-         └── 订单状态为 PENDING_PAYMENT(0)
+  ├── 4. 事务扣库存+创建订单：FlashOrderServiceImpl.deductStockAndCreateOrder()
+  │      └── @Transactional → DB 幂等 → 乐观锁 deductStock → INSERT order
+  │      └── 失败自动回滚
+  │
+  └── 异常处理：
+         ├── BusinessException（售罄）→ 吞没不重试
+         └── 其他 Exception → re-throw 触发 RocketMQ 重试
 ```
 
 ### 消费者启用控制
