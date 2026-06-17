@@ -69,6 +69,23 @@
         </div>
       </div>
 
+      <!-- Captcha -->
+      <div class="captcha-section" v-if="canPurchase">
+        <div class="captcha-row">
+          <div class="captcha-img" @click="refreshCaptcha" title="点击刷新验证码">
+            <div v-if="captchaSvg" v-html="captchaSvg"></div>
+            <span v-else class="captcha-placeholder">加载中...</span>
+          </div>
+          <input
+            v-model="captchaAnswer"
+            type="text"
+            class="captcha-input"
+            placeholder="输入计算结果"
+            autocomplete="off"
+          />
+        </div>
+      </div>
+
       <!-- CTA -->
       <div class="cta-section">
         <button
@@ -111,6 +128,7 @@ import { ref, computed, onMounted, onUnmounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { getFlashSaleDetail, purchase } from '../api/flash-sale'
 import { getItemDetail } from '../api/item'
+import { getOrderStatus } from '../api/order'
 import { useToast } from '../composables/useToast'
 
 const route = useRoute()
@@ -124,6 +142,21 @@ const loadError = ref('')
 const purchasing = ref(false)
 const tick = ref(0)
 let timer = null
+
+const captchaId = ref('')
+const captchaSvg = ref('')
+const captchaAnswer = ref('')
+
+async function refreshCaptcha() {
+  try {
+    const res = await fetch('/api/auth/captcha')
+    const json = await res.json()
+    if (json.code === 200) {
+      captchaId.value = json.data.captchaId
+      captchaSvg.value = json.data.svg
+    }
+  } catch (e) { /* ignore */ }
+}
 
 const flashSaleStatus = computed(() => {
   if (!sale.value) return ''
@@ -202,13 +235,40 @@ async function handlePurchase() {
   if (!canPurchase.value || purchasing.value) return
   purchasing.value = true
   try {
-    await purchase(route.params.id)
-    toast.success('抢购成功！正在跳转到订单页...')
-    setTimeout(() => {
-      router.push('/orders')
-    }, 1500)
+    const res = await purchase(route.params.id, captchaId.value, captchaAnswer.value)
+    const messageKey = res.data?.messageKey
+    if (!messageKey) {
+      toast.success('抢购成功！正在跳转到订单页...')
+      setTimeout(() => router.push('/orders'), 1000)
+      return
+    }
+
+    toast.success('抢购请求已提交，正在确认订单...')
+
+    // Poll for order creation (max 20 attempts, ~10s)
+    let confirmed = false
+    for (let i = 0; i < 20; i++) {
+      await new Promise(r => setTimeout(r, 500))
+      try {
+        const statusRes = await getOrderStatus(messageKey)
+        if (statusRes.data?.status === 'DONE') {
+          confirmed = true
+          break
+        }
+      } catch (e) {
+        // ignore poll errors, keep retrying
+      }
+    }
+
+    if (confirmed) {
+      toast.success('订单已创建，正在跳转...')
+    } else {
+      toast.success('抢购请求已提交，请稍后查看订单')
+    }
+    router.push('/orders')
   } catch (e) {
     toast.error(e.response?.data?.msg || e.message || '抢购失败')
+    refreshCaptcha()
   } finally {
     purchasing.value = false
   }
@@ -220,6 +280,7 @@ function goBack() {
 
 onMounted(() => {
   fetchData()
+  refreshCaptcha()
   timer = setInterval(() => {
     tick.value++
   }, 1000)
@@ -457,5 +518,56 @@ onUnmounted(() => {
     position: fixed; bottom: 0; left: 0; right: 0; z-index: 20;
   }
   .detail-page { padding-bottom: 72px; }
+}
+
+/* ===== Captcha ===== */
+.captcha-section {
+  margin-bottom: var(--space-3);
+}
+.captcha-row {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+}
+.captcha-img {
+  flex-shrink: 0;
+  cursor: pointer;
+  border-radius: var(--radius-md);
+  overflow: hidden;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  transition: all 0.15s ease;
+  line-height: 0;
+}
+.captcha-img:hover {
+  border-color: var(--color-accent);
+}
+.captcha-input {
+  flex: 1;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: var(--radius-md);
+  padding: var(--space-3) var(--space-4);
+  color: var(--color-text);
+  font-size: 15px;
+  min-height: 50px;
+  outline: none;
+  transition: all 0.15s ease;
+}
+.captcha-input:focus {
+  border-color: var(--color-accent);
+  box-shadow: 0 0 0 3px var(--color-accent-light);
+  background: rgba(255, 255, 255, 0.06);
+}
+.captcha-input::placeholder {
+  color: var(--color-text-muted);
+}
+.captcha-placeholder {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 160px;
+  height: 50px;
+  font-size: 12px;
+  color: var(--color-text-muted);
 }
 </style>

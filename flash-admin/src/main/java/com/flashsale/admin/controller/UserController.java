@@ -26,11 +26,16 @@ public class UserController {
     }
 
     @GetMapping("/list")
-    public ResultVO<List<UserVO>> list(@RequestParam(defaultValue = "1") long page,
-                                        @RequestParam(defaultValue = "10") long size) {
+    public ResultVO<Map<String, Object>> list(@RequestParam(defaultValue = "1") long page,
+                                               @RequestParam(defaultValue = "10") long size) {
         IPage<com.flashsale.model.entity.User> userPage = userService.listUsers(page, size);
         List<UserVO> records = userPage.getRecords().stream().map(UserVO::from).toList();
-        return ResultVO.success(records);
+        return ResultVO.success(Map.of(
+                "records", records,
+                "total", userPage.getTotal(),
+                "pages", userPage.getPages(),
+                "current", userPage.getCurrent()
+        ));
     }
 
     @PutMapping("/{id}/status")

@@ -42,6 +42,22 @@
               required
             />
           </div>
+          <div class="form-group">
+            <label class="form-label">验证码</label>
+            <div class="captcha-row">
+              <input
+                v-model="captchaAnswer"
+                type="text"
+                class="captcha-input"
+                placeholder="请输入计算结果"
+                autocomplete="off"
+              />
+              <div class="captcha-img" @click="refreshCaptcha" title="点击刷新">
+                <div v-if="captchaSvg" v-html="captchaSvg"></div>
+                <span v-else class="captcha-placeholder">加载中...</span>
+              </div>
+            </div>
+          </div>
           <p v-if="error" class="form-error" role="alert">{{ error }}</p>
           <button type="submit" :disabled="loading" class="submit-btn">
             <span v-if="loading" class="spinner spinner--sm"></span>
@@ -57,7 +73,7 @@
 </template>
 
 <script setup>
-import { ref } from 'vue'
+import { ref, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { login } from '../api/auth'
 
@@ -67,20 +83,40 @@ const error = ref('')
 const loading = ref(false)
 const router = useRouter()
 
+const captchaId = ref('')
+const captchaSvg = ref('')
+const captchaAnswer = ref('')
+
+async function refreshCaptcha() {
+  try {
+    const res = await fetch('/api/auth/captcha')
+    const json = await res.json()
+    if (json.code === 200) {
+      captchaId.value = json.data.captchaId
+      captchaSvg.value = json.data.svg
+    }
+  } catch (e) { /* ignore */ }
+}
+
 async function handleLogin() {
   error.value = ''
   loading.value = true
   try {
-    const res = await login(username.value, password.value)
+    const res = await login(username.value, password.value, captchaId.value, captchaAnswer.value)
     localStorage.setItem('accessToken', res.data.accessToken)
     localStorage.setItem('refreshToken', res.data.refreshToken)
     router.push('/')
   } catch (e) {
     error.value = e.response?.data?.msg || e.message || '登录失败'
+    refreshCaptcha()
   } finally {
     loading.value = false
   }
 }
+
+onMounted(() => {
+  refreshCaptcha()
+})
 </script>
 
 <style scoped>
@@ -265,5 +301,37 @@ input:focus {
 }
 .auth-link a:hover {
   text-decoration: underline;
+}
+
+/* ===== Captcha ===== */
+.captcha-row {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+}
+.captcha-input {
+  flex: 1;
+}
+.captcha-img {
+  flex-shrink: 0;
+  cursor: pointer;
+  border-radius: 6px;
+  overflow: hidden;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  transition: all 0.15s ease;
+  line-height: 0;
+}
+.captcha-img:hover {
+  border-color: var(--color-accent);
+  opacity: 0.9;
+}
+.captcha-placeholder {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 160px;
+  height: 50px;
+  font-size: 12px;
+  color: var(--color-text-muted);
 }
 </style>

@@ -2,9 +2,11 @@ package com.flashsale.api.controller;
 
 import com.baomidou.mybatisplus.core.metadata.IPage;
 import com.flashsale.common.annotation.RateLimit;
+import com.flashsale.common.result.ResultCode;
 import com.flashsale.common.result.ResultVO;
 import com.flashsale.model.entity.FlashOrder;
 import com.flashsale.model.vo.FlashOrderVO;
+import com.flashsale.service.CaptchaService;
 import com.flashsale.service.FlashOrderService;
 import org.springframework.security.core.Authentication;
 import org.springframework.web.bind.annotation.DeleteMapping;
@@ -25,9 +27,11 @@ import java.util.Map;
 public class FlashOrderController {
 
     private final FlashOrderService flashOrderService;
+    private final CaptchaService captchaService;
 
-    public FlashOrderController(FlashOrderService flashOrderService) {
+    public FlashOrderController(FlashOrderService flashOrderService, CaptchaService captchaService) {
         this.flashOrderService = flashOrderService;
+        this.captchaService = captchaService;
     }
 
     /**
@@ -37,7 +41,14 @@ public class FlashOrderController {
      */
     @RateLimit(key = "purchase", permits = 5, windowSeconds = 5)
     @PostMapping("/flash-sale/{flashSaleId}/purchase")
-    public ResultVO<Map<String, Object>> purchase(@PathVariable Long flashSaleId, Authentication auth) {
+    public ResultVO<Map<String, Object>> purchase(
+            @PathVariable Long flashSaleId,
+            @RequestParam String captchaId,
+            @RequestParam String captchaAnswer,
+            Authentication auth) {
+        if (!captchaService.validate(captchaId, captchaAnswer)) {
+            return ResultVO.fail(ResultCode.CAPTCHA_ERROR, "验证码错误或已过期");
+        }
         Long userId = (Long) auth.getPrincipal();
         FlashOrderVO vo = flashOrderService.purchase(flashSaleId, userId);
         // Phase 3: 返回 messageKey 让客户端轮询订单状态

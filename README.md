@@ -37,19 +37,30 @@ flash-sale
 
 ### 用户端
 - 注册 / 登录（JWT 双 Token：accessToken + refreshToken）
+- 验证码校验（算术题验证码，防撞库/防刷）
 - 浏览商品列表、查看商品详情
 - 查看进行中的秒杀活动
-- 秒杀下单（Redis Lua 原子扣库存 + RocketMQ 异步创建订单）
+- 秒杀下单（验证码 + Redis Lua 原子扣库存 + RocketMQ 异步创建订单）
 - 轮询订单处理状态
 - 查看我的订单
-- 支付订单 / 取消订单
+- 支付订单 / 取消订单 / 退款 / 删除已取消订单
 
 ### 管理端
-- 管理员登录
+- 管理员登录（验证码校验）
 - 商品 CRUD（上架/下架）
-- 秒杀活动 CRUD + 状态管理（激活时自动预热 Redis 缓存）
-- 订单列表查看
+- 秒杀活动 CRUD + 状态管理（激活时自动预热 Redis 缓存，更新时自动清除缓存）
+- 订单列表查看 / 支付 / 退款 / 删除已取消订单
 - 用户列表 + 启用/禁用
+
+### 安全防护
+- 接口限流（@RateLimit 注解 + Redis ZSET 滑动窗口）
+  - 秒杀下单：5 次 / 5 秒
+  - C 端登录：5 次 / 60 秒
+  - 注册：3 次 / 60 秒
+  - 管理端登录：3 次 / 60 秒
+- 验证码（算术题 + Redis 存储，一次性消费）
+- JWT 密钥生产环境走环境变量 ${JWT_SECRET}
+- 异常分类处理（业务异常吞没，系统异常 re-throw 触发 MQ 重试）
 
 ### 自动化
 - 秒杀活动状态自动流转（定时任务：待开始 -> 进行中 -> 已结束）
@@ -118,30 +129,37 @@ cd flash-admin-frontend && npm install && npm run dev
 | 方法 | 路径 | 说明 | 认证 |
 |------|------|------|------|
 | POST | /api/auth/register | 注册 | 否 |
-| POST | /api/auth/login | 登录 | 否 |
+| POST | /api/auth/login | 登录（需验证码） | 否 |
 | POST | /api/auth/refresh | 刷新 Token | 否 |
+| GET | /api/auth/captcha | 获取验证码 | 否 |
 | GET | /api/item/list | 商品列表 | 是 |
 | GET | /api/item/{id} | 商品详情 | 是 |
 | GET | /api/flash-sale/active | 进行中的秒杀活动 | 是 |
 | GET | /api/flash-sale/{id} | 秒杀活动详情 | 是 |
-| POST | /api/flash-sale/{id}/purchase | 秒杀下单 | 是 |
+| POST | /api/flash-sale/{id}/purchase | 秒杀下单（需验证码） | 是 |
 | GET | /api/order/status?messageKey= | 轮询订单状态 | 是 |
 | GET | /api/order/list | 我的订单 | 是 |
 | GET | /api/order/{id} | 订单详情 | 是 |
 | POST | /api/order/{id}/pay | 支付订单 | 是 |
 | POST | /api/order/{id}/cancel | 取消订单 | 是 |
+| POST | /api/order/{id}/refund | 退款 | 是 |
+| DELETE | /api/order/{id} | 删除已取消订单 | 是 |
 
 ### 管理端（/admin）
 
 | 方法 | 路径 | 说明 |
 |------|------|------|
-| POST | /admin/auth/login | 管理员登录 |
+| POST | /admin/auth/login | 管理员登录（需验证码） |
+| GET | /admin/auth/captcha | 获取验证码 |
 | GET/POST/PUT/DELETE | /admin/item/** | 商品管理 |
 | GET/POST/PUT/DELETE | /admin/flash-sale/** | 秒杀活动管理 |
 | PUT | /admin/flash-sale/{id}/status | 变更活动状态 |
 | GET | /admin/order/list | 订单列表 |
 | GET | /admin/order/{id} | 订单详情 |
-| GET | /admin/user/list | 用户列表 |
+| POST | /admin/order/{id}/pay | 支付订单 |
+| POST | /admin/order/{id}/refund | 退款 |
+| DELETE | /admin/order/{id} | 删除已取消订单 |
+| GET | /admin/user/list | 用户列表（分页） |
 | PUT | /admin/user/{id}/status | 启用/禁用用户 |
 
 ## 秒杀下单流程
