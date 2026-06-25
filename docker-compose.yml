@@ -1,0 +1,159 @@
+# Flash Sale - middleware + app containers
+#
+# Start middleware only (run backend/frontend locally): docker compose up -d mysql redis nacos rocketmq-namesrv rocketmq-broker
+# Full deployment: docker compose up -d
+# Logs: docker compose logs -f
+# Stop: docker compose down
+# Clean (remove volumes): docker compose down -v
+
+services:
+  # Infrastructure
+  mysql:
+    image: mysql:8.0
+    container_name: flash-mysql
+    restart: unless-stopped
+    ports:
+      - "3306:3306"
+    environment:
+      MYSQL_ROOT_PASSWORD: root123
+      TZ: Asia/Shanghai
+    volumes:
+      - flash-mysql-data:/var/lib/mysql
+      # Data installed by application at runtime (DataInitRunner)
+    command:
+      - --default-authentication-plugin=mysql_native_password
+      - --character-set-server=utf8mb4
+      - --collation-server=utf8mb4_unicode_ci
+      - --default-time-zone=+08:00
+
+  redis:
+    image: redis:7
+    container_name: flash-redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    volumes:
+      - flash-redis-data:/data
+    command: redis-server --appendonly yes --maxmemory 256mb --maxmemory-policy allkeys-lru
+
+  nacos:
+    image: nacos/nacos-server:v2.5.1
+    container_name: flash-nacos
+    restart: unless-stopped
+    ports:
+      - "8848:8848"
+      - "9848:9848"
+    environment:
+      - MODE=standalone
+      - PREFER_HOST_MODE=hostname
+      - NACOS_AUTH_ENABLE=true
+      - NACOS_AUTH_TOKEN=5raBdLZjA6h1Aynxe+kQNCJAKfVYI04ghX2OGyiPAorKvCrxtR8q8RXpvtNIif0s
+      - NACOS_AUTH_IDENTITY_KEY=serverIdentity
+      - NACOS_AUTH_IDENTITY_VALUE=dev-nacos-identity
+      - TZ=Asia/Shanghai
+      - JVM_XMS=256m
+      - JVM_XMX=256m
+
+  rocketmq-namesrv:
+    image: apache/rocketmq:5.3.0
+    container_name: flash-rocketmq-namesrv
+    restart: unless-stopped
+    ports:
+      - "9876:9876"
+    environment:
+      TZ: Asia/Shanghai
+      JAVA_OPT_EXT: -server -Xms256m -Xmx256m
+    command: sh mqnamesrv
+
+  rocketmq-broker:
+    image: apache/rocketmq:5.3.0
+    container_name: flash-rocketmq-broker
+    restart: unless-stopped
+    depends_on:
+      rocketmq-namesrv:
+        condition: service_started
+    ports:
+      - "10909:10909"
+      - "10911:10911"
+    environment:
+      TZ: Asia/Shanghai
+      NAMESRV_ADDR: rocketmq-namesrv:9876
+      JAVA_OPT_EXT: -server -Xms512m -Xmx512m -Xmn256m
+    command: sh mqbroker -n rocketmq-namesrv:9876 -c /home/rocketmq/conf/broker.conf
+    volumes:
+      - ./docker/rocketmq/logs:/home/rocketmq/logs
+      - ./docker/rocketmq/store:/home/rocketmq/store
+      - ./docker/rocketmq/conf/broker.conf:/home/rocketmq/conf/broker.conf
+
+  # Backend
+  gateway:
+    build:
+      context: .
+      target: flash-gateway
+    image: flash-gateway
+    container_name: flash-gateway
+    restart: unless-stopped
+    depends_on:
+      - nacos
+    ports:
+      - "8080:8080"
+    environment:
+      - SPRING_PROFILES_ACTIVE=docker
+
+  api:
+    build:
+      context: .
+      target: flash-api
+    image: flash-api
+    container_name: flash-api
+    restart: unless-stopped
+    depends_on:
+      - nacos
+      - mysql
+      - redis
+      - rocketmq-namesrv
+    ports:
+      - "8081:8081"
+    environment:
+      - SPRING_PROFILES_ACTIVE=docker
+
+  admin:
+    build:
+      context: .
+      target: flash-admin
+    image: flash-admin
+    container_name: flash-admin
+    restart: unless-stopped
+    depends_on:
+      - nacos
+      - mysql
+      - redis
+    ports:
+      - "8082:8082"
+    environment:
+      - SPRING_PROFILES_ACTIVE=docker
+
+  # Frontend
+  frontend:
+    image: nginx:alpine
+    container_name: flash-frontend
+    restart: unless-stopped
+    ports:
+      - "5173:80"
+    volumes:
+      - ./flash-frontend/dist:/usr/share/nginx/html:ro
+
+  admin-frontend:
+    image: nginx:alpine
+    container_name: flash-admin-frontend
+    restart: unless-stopped
+    ports:
+      - "5174:80"
+    volumes:
+      - ./flash-admin-frontend/dist:/usr/share/nginx/html:ro
+
+volumes:
+  flash-mysql-data:
+  flash-redis-data:
+  flash-rocketmq-logs:
+  flash-rocketmq-store:

@@ -1,4 +1,4 @@
-# Flash Sale 秒杀系统 -- 开发环境部署指南
+﻿# Flash Sale 秒杀系统 -- 开发环境部署指南
 
 本文档面向新加入的开发者，帮助你在本地快速搭建完整的开发环境。按照以下步骤操作，大约 20 分钟即可完成全部部署。
 
@@ -22,458 +22,112 @@
 
 ---
 
-## 2. 中间件部署（Docker）
+## 2. 中间件部署（Docker Compose）
 
-本项目依赖四个中间件：MySQL、Redis、Nacos、RocketMQ。你可以逐个启动，也可以跳到 [2.5 一键启动所有中间件](#25-一键启动所有中间件) 使用合并的 compose 文件。
+项目根目录已提供 docker-compose.yml，包含全部中间件（MySQL、Redis、Nacos、RocketMQ）以及后端/前端服务定义。
 
-建议在项目根目录外创建一个专用目录来存放 compose 文件，例如 `D:\dev-env\flash-sale\`，也可以直接放在项目的根目录下。
+### 2.1 启动中间件
 
----
+`ash
+# 进入项目根目录
+cd flash-sale
 
-### 2.1 MySQL 8.0
+# 启动全部中间件（MySQL + Redis + Nacos + RocketMQ）
+docker compose up -d mysql redis nacos rocketmq-namesrv rocketmq-broker
+`
 
-创建 `docker-compose-mysql.yml`：
+首次启动会拉取镜像，等待约 2-3 分钟。
 
-```yaml
-services:
-  mysql:
-    image: mysql:8.0
-    container_name: mysql
-    restart: unless-stopped
-    ports:
-      - "3306:3306"
-    environment:
-      MYSQL_ROOT_PASSWORD: root123
-      TZ: Asia/Shanghai
-    volumes:
-      - mysql-data:/var/lib/mysql
-    command:
-      - --default-authentication-plugin=mysql_native_password
-      - --character-set-server=utf8mb4
-      - --collation-server=utf8mb4_unicode_ci
-      - --default-time-zone=+08:00
-      - --max-connections=200
-      - --innodb-buffer-pool-size=256M
+### 2.2 验证中间件启动状态
 
-volumes:
-  mysql-data:
-```
+`ash
+# 查看所有容器状态
+docker ps --format "table {{.Names}}\t{{.Status}}"
 
-**启动命令：**
+# 检查 RocketMQ Broker 是否就绪（必须看到 boot success）
+docker logs flash-rocketmq-broker --tail 5
 
-```bash
-docker compose -f docker-compose-mysql.yml up -d
-```
+# 验证 MySQL 连接
+docker exec flash-mysql mysql -u root -proot123 -e "SELECT VERSION();"
+
+# 验证 Redis 连接
+docker exec flash-redis redis-cli ping
+`
 
 **关键配置说明：**
 
-| 配置项 | 值 | 说明 |
-|--------|-----|------|
-| root 密码 | `root123` | 与 application.yml 中配置的密码一致 |
-| 字符集 | `utf8mb4 / utf8mb4_unicode_ci` | 支持完整的 Unicode 字符（包括 emoji） |
-| 时区 | `+08:00` | 东八区，与业务代码保持一致 |
-| 认证插件 | `mysql_native_password` | MySQL 8 默认使用 `caching_sha2_password`，切换为旧版插件以保证兼容性 |
-| 最大连接数 | `200` | 开发环境足够使用 |
-| InnoDB 缓冲池 | `256M` | 开发环境适当分配，避免占用过多内存 |
-
-**验证连接：**
-
-```bash
-docker exec -it mysql mysql -u root -proot123 -e "SELECT VERSION();"
-```
-
----
-
-### 2.2 Redis 7
-
-创建 `docker-compose-redis.yml`：
-
-```yaml
-services:
-  redis:
-    image: redis:7
-    container_name: redis
-    restart: unless-stopped
-    ports:
-      - "6379:6379"
-    environment:
-      TZ: Asia/Shanghai
-    volumes:
-      - redis-data:/data
-    command:
-      - redis-server
-      - --appendonly
-      - "yes"
-      - --maxmemory
-      - 256mb
-      - --maxmemory-policy
-      - allkeys-lru
-
-volumes:
-  redis-data:
-```
-
-**启动命令：**
-
-```bash
-docker compose -f docker-compose-redis.yml up -d
-```
-
-**关键配置说明：**
-
-| 配置项 | 值 | 说明 |
-|--------|-----|------|
-| AOF 持久化 | `appendonly yes` | 开启 AOF 日志，防止数据丢失 |
-| 最大内存 | `256mb` | 开发环境限制，生产环境需根据业务调整 |
-| 淘汰策略 | `allkeys-lru` | 内存不足时淘汰最近最少使用的 key，适合缓存场景 |
-
-> **注意**：本项目未设置 Redis 密码，仅适用于本地开发环境。
-
-**验证连接：**
-
-```bash
-docker exec -it redis redis-cli ping
-# 应返回 PONG
-```
-
----
-
-### 2.3 Nacos v2.5.1
-
-创建 `docker-compose-nacos.yml`：
-
-```yaml
-services:
-  nacos:
-    image: nacos/nacos-server:v2.5.1
-    container_name: nacos
-    restart: unless-stopped
-    ports:
-      - "8848:8848"
-      - "9848:9848"
-      - "9849:9849"
-    environment:
-      - MODE=standalone
-      - PREFER_HOST_MODE=hostname
-      - NACOS_AUTH_ENABLE=true
-      - NACOS_AUTH_TOKEN=5raBdLZjA6h1Aynxe+kQNCJAKfVYI04ghX2OGyiPAorKvCrxtR8q8RXpvtNIif0s
-      - NACOS_AUTH_IDENTITY_KEY=serverIdentity
-      - NACOS_AUTH_IDENTITY_VALUE=dev-nacos-identity
-      - TZ=Asia/Shanghai
-      - JVM_XMS=512m
-      - JVM_XMX=512m
-      - JVM_XMN=256m
-    volumes:
-      - nacos-logs:/home/nacos/logs
-      - nacos-data:/home/nacos/data
-
-volumes:
-  nacos-logs:
-  nacos-data:
-```
-
-**启动命令：**
-
-```bash
-docker compose -f docker-compose-nacos.yml up -d
-```
-
-**关键配置说明：**
-
-| 配置项 | 值 | 说明 |
-|--------|-----|------|
-| 运行模式 | `standalone` | 单机模式，开发环境无需集群 |
-| 认证 | `NACOS_AUTH_ENABLE=true` | 开启认证，默认账号密码为 `nacos/nacos` |
-| 控制台地址 | http://localhost:8848/nacos | 启动后访问此地址进入管理界面 |
-| JVM 参数 | `Xms=512m, Xmx=512m, Xmn=256m` | 开发环境适当缩减内存分配 |
-
-**端口说明：**
-
-| 端口 | 用途 |
-|------|------|
-| `8848` | HTTP 控制台及 OpenAPI |
-| `9848` | gRPC 客户端通信端口 |
-| `9849` | gRPC 服务端通信端口 |
-
-> **重要**：启动 Nacos 后，需要在 Nacos 控制台创建一个命名空间（Namespace），**命名空间 ID 必须为**：
->
-> ```
-> 4b56aa8f-8ca1-484a-9189-607d0fd733ab
-> ```
->
-> 此 ID 与项目 `application.yml` 中的 `spring.cloud.nacos.discovery.namespace` 配置一致。如果命名空间 ID 不匹配，所有微服务将无法注册到 Nacos。
->
-> **操作步骤**：
-> 1. 访问 http://localhost:8848/nacos ，使用 `nacos/nacos` 登录
-> 2. 进入「命名空间」页面
-> 3. 点击「新建命名空间」
-> 4. 命名空间 ID 填写 `4b56aa8f-8ca1-484a-9189-607d0fd733ab`
-> 5. 命名空间名称可自定义，例如 `flash-sale-dev`
-
----
-
-### 2.4 RocketMQ 5.3.0
-
-> **注意**：经实测，`apache/rocketmq:5.3.0` 运行正常。更早的 5.1.x 镜像存在 `StoreUtil NoClassDefFoundError` Bug，5.3.0 已修复。
-
-**第一步：创建 broker 配置文件**
-
-创建目录结构并创建 `conf/broker.conf`：
-
-```
-rocketmq/
-├── conf/
-│   └── broker.conf
-├── docker-compose-rocketmq.yml
-└── data/          (运行时自动生成)
-```
-
-`conf/broker.conf` 内容：
-
-```properties
-brokerClusterName = DefaultCluster
-brokerName = broker-a
-brokerId = 0
-deleteWhen = 04
-fileReservedTime = 48
-brokerRole = ASYNC_MASTER
-flushDiskType = ASYNC_FLUSH
-autoCreateTopicEnable = true
-autoCreateSubscriptionGroup = true
-brokerIP1 = 127.0.0.1
-```
-
-**第二步：创建 `docker-compose-rocketmq.yml`**
-
-```yaml
-services:
-  namesrv:
-    image: apache/rocketmq:5.3.0
-    container_name: rocketmq-namesrv
-    restart: unless-stopped
-    ports:
-      - "9876:9876"
-    environment:
-      TZ: Asia/Shanghai
-      JAVA_OPT_EXT: -server -Xms256m -Xmx256m
-    command: sh mqnamesrv
-    volumes:
-      - ./data/namesrv-logs:/home/rocketmq/logs
-
-  broker:
-    image: apache/rocketmq:5.3.0
-    container_name: rocketmq-broker
-    restart: unless-stopped
-    ports:
-      - "10909:10909"
-      - "10911:10911"
-    environment:
-      TZ: Asia/Shanghai
-      NAMESRV_ADDR: namesrv:9876
-      JAVA_OPT_EXT: >-
-        -server -Xms512m -Xmx512m -Xmn256m
-    command: sh mqbroker -n namesrv:9876 -c /home/rocketmq/conf/broker.conf
-    depends_on:
-      - namesrv
-    volumes:
-      - ./conf/broker.conf:/home/rocketmq/conf/broker.conf
-      - ./data/broker-logs:/home/rocketmq/logs
-      - ./data/broker-store:/home/rocketmq/store
-```
-
-**启动命令：**
-
-```bash
-docker compose -f docker-compose-rocketmq.yml up -d
-```
-
-**关键配置说明：**
-
-| 配置项 | 值 | 说明 |
-|--------|-----|------|
-| 镜像版本 | `5.3.0` | 5.3.0 已修复 StoreUtil Bug，更早的 5.1.x 版本存在该问题 |
-| `autoCreateTopicEnable` | `true` | 自动创建 Topic，开发环境无需手动创建 |
-| `autoCreateSubscriptionGroup` | `true` | 自动创建消费者组 |
-| `brokerIP1` | `127.0.0.1` | Broker 对外暴露的 IP，必须设置为宿主机 IP。如果 Docker 运行在远程服务器，需改为服务器的公网/内网 IP |
-| `flushDiskType` | `ASYNC_FLUSH` | 异步刷盘，开发环境追求性能 |
-| `brokerRole` | `ASYNC_MASTER` | 异步主从，开发环境无需配置 Slave |
-
-**端口说明：**
-
-| 端口 | 用途 |
-|------|------|
-| `9876` | NameServer 端口（客户端通过此端口发现 Broker） |
-| `10911` | Broker 主端口（消息收发） |
-| `10909` | Broker VIP 通道端口 |
-
-**验证运行状态：**
-
-```bash
-docker logs rocketmq-broker | tail -20
-# 看到 "The broker[broker-a, 172.x.x.x:10911] boot success" 即为启动成功
-```
-
-> **重要**：确认 Broker 日志输出 `boot success` 后，再启动 flash-api 和 flash-admin。如果消费者在 Broker 就绪前启动，可能不报错但实际未订阅成功，消息将被静默丢弃。
-
----
-
-### 2.5 一键启动所有中间件
-
-如果你不想逐个启动，可以创建一个合并的 `docker-compose.yml`，一次启动所有中间件。
-
-创建 `docker-compose.yml`：
-
-```yaml
-services:
-  mysql:
-    image: mysql:8.0
-    container_name: mysql
-    restart: unless-stopped
-    ports:
-      - "3306:3306"
-    environment:
-      MYSQL_ROOT_PASSWORD: root123
-      TZ: Asia/Shanghai
-    volumes:
-      - mysql-data:/var/lib/mysql
-    command:
-      - --default-authentication-plugin=mysql_native_password
-      - --character-set-server=utf8mb4
-      - --collation-server=utf8mb4_unicode_ci
-      - --default-time-zone=+08:00
-      - --max-connections=200
-      - --innodb-buffer-pool-size=256M
-
-  redis:
-    image: redis:7
-    container_name: redis
-    restart: unless-stopped
-    ports:
-      - "6379:6379"
-    environment:
-      TZ: Asia/Shanghai
-    volumes:
-      - redis-data:/data
-    command:
-      - redis-server
-      - --appendonly
-      - "yes"
-      - --maxmemory
-      - 256mb
-      - --maxmemory-policy
-      - allkeys-lru
-
-  nacos:
-    image: nacos/nacos-server:v2.5.1
-    container_name: nacos
-    restart: unless-stopped
-    ports:
-      - "8848:8848"
-      - "9848:9848"
-      - "9849:9849"
-    environment:
-      - MODE=standalone
-      - PREFER_HOST_MODE=hostname
-      - NACOS_AUTH_ENABLE=true
-      - NACOS_AUTH_TOKEN=5raBdLZjA6h1Aynxe+kQNCJAKfVYI04ghX2OGyiPAorKvCrxtR8q8RXpvtNIif0s
-      - NACOS_AUTH_IDENTITY_KEY=serverIdentity
-      - NACOS_AUTH_IDENTITY_VALUE=dev-nacos-identity
-      - TZ=Asia/Shanghai
-      - JVM_XMS=512m
-      - JVM_XMX=512m
-      - JVM_XMN=256m
-    volumes:
-      - nacos-logs:/home/nacos/logs
-      - nacos-data:/home/nacos/data
-
-  namesrv:
-    image: apache/rocketmq:5.3.0
-    container_name: rocketmq-namesrv
-    restart: unless-stopped
-    ports:
-      - "9876:9876"
-    environment:
-      TZ: Asia/Shanghai
-      JAVA_OPT_EXT: -server -Xms256m -Xmx256m
-    command: sh mqnamesrv
-    volumes:
-      - ./data/namesrv-logs:/home/rocketmq/logs
-
-  broker:
-    image: apache/rocketmq:5.3.0
-    container_name: rocketmq-broker
-    restart: unless-stopped
-    ports:
-      - "10909:10909"
-      - "10911:10911"
-    environment:
-      TZ: Asia/Shanghai
-      NAMESRV_ADDR: namesrv:9876
-      JAVA_OPT_EXT: >-
-        -server -Xms512m -Xmx512m -Xmn256m
-    command: sh mqbroker -n namesrv:9876 -c /home/rocketmq/conf/broker.conf
-    depends_on:
-      - namesrv
-    volumes:
-      - ./conf/broker.conf:/home/rocketmq/conf/broker.conf
-      - ./data/broker-logs:/home/rocketmq/logs
-      - ./data/broker-store:/home/rocketmq/store
-
-volumes:
-  mysql-data:
-  redis-data:
-  nacos-logs:
-  nacos-data:
-```
-
-**一键启动：**
-
-```bash
-docker compose up -d
-```
-
-**查看所有容器状态：**
-
-```bash
-docker compose ps
-```
-
-**一键停止所有中间件：**
-
-```bash
-docker compose down
-```
-
-> **提示**：首次启动需要拉取镜像，可能需要几分钟。后续启动会直接使用本地缓存的镜像，速度很快。
-
----
-
+| 中间件 | 容器名 | 地址 | 账号/密码 |
+|--------|--------|------|-----------|
+| MySQL 8.0 | flash-mysql | 127.0.0.1:3306 | root / root123 |
+| Redis 7 | flash-redis | 127.0.0.1:6379 | 无密码 |
+| Nacos 2.5.1 | flash-nacos | 127.0.0.1:8848 | nacos / nacos |
+| RocketMQ 5.3.0 NameServer | flash-rocketmq-namesrv | 127.0.0.1:9876 | - |
+| RocketMQ 5.3.0 Broker | flash-rocketmq-broker | 127.0.0.1:10911 | - |
+
+> **说明**：rokerIP1 = 127.0.0.1 配置在 docker/rocketmq/conf/broker.conf 中，确保本地 Java 应用能直接连接 Broker，而非通过 Docker 内部 IP。
+
+### 2.3 Nacos 命名空间初始化
+
+> **重要**：Nacos 启动后，需要手动创建一个命名空间，否则微服务无法注册。
+
+**操作步骤：**
+1. 访问 http://localhost:8848/nacos ，使用 
+acos / nacos 登录
+2. 进入左侧菜单「命名空间」页面
+3. 点击「新建命名空间」
+4. **命名空间 ID** 填写（必须与配置一致）：
+   `
+   4b56aa8f-8ca1-484a-9189-607d0fd733ab
+   `
+5. **命名空间名称** 可自定义，例如 lash-sale-dev
+6. 点击「确定」完成创建
+
+> **注意**：命名空间 ID 是在创建时指定的，之后无法修改。如果创建时未填写 ID，Nacos 会自动生成随机 ID，此时必须删除后重新创建。该 ID 与 pplication-dev.yml 中的 spring.cloud.nacos.discovery.namespace 配置一致。
+
+### 2.4 中间件管理命令
+
+`ash
+# 停止所有中间件（保留数据卷）
+docker compose stop mysql redis nacos rocketmq-namesrv rocketmq-broker
+
+# 重新启动
+docker compose start mysql redis nacos rocketmq-namesrv rocketmq-broker
+
+# 完全删除容器（保留数据卷）
+docker compose rm -f mysql redis nacos rocketmq-namesrv rocketmq-broker
+
+# 完全删除容器+数据卷（所有数据丢失，谨慎使用）
+docker compose down -v
+`
 ## 3. 数据库初始化
 
-中间件启动后，执行以下命令初始化数据库和表结构：
+### 3.1 创建数据库
 
-```bash
-mysql -u root -proot123 < sql/init.sql
-```
+`ash
+docker exec flash-mysql mysql -u root -proot123 -e "CREATE DATABASE IF NOT EXISTS flash_sale DEFAULT CHARACTER SET utf8mb4 DEFAULT COLLATE utf8mb4_unicode_ci;"
+`
+
+### 3.2 初始化表结构和种子数据
+
+`ash
+docker exec -i flash-mysql mysql -u root -proot123 --default-character-set=utf8mb4 flash_sale < sql/init.sql
+`
 
 该脚本会完成以下操作：
 
-1. 创建数据库 `flash_sale`（字符集 utf8mb4）
-2. 创建 4 张核心表（`user`、`item`、`flash_sale`、`flash_order`）
-3. 写入 7 件商品 + 7 个秒杀活动的种子数据
+1. 创建 4 张核心表（user、item、lash_sale、lash_order）
+2. 写入 7 件商品 + 7 个秒杀活动的种子数据
 
-> **注意**：管理员账号（`admin/admin123`）不需要手动创建。应用首次启动时，`DataInitRunner` 会自动初始化管理员账号。
+> **注意**：管理员账号（dmin/admin123）不需要手动创建。应用首次启动时，DataInitRunner 会自动初始化管理员账号。
+> **注意**：MySQL 内部执行 SQL 时如果字符集不匹配会导致中文乱码，必须指定 --default-character-set=utf8mb4。
 
-**验证数据库：**
+### 3.3 验证数据
 
-```bash
-mysql -u root -proot123 -e "USE flash_sale; SHOW TABLES;"
-```
+`ash
+docker exec -i flash-mysql mysql -u root -proot123 flash_sale -e "SELECT id,name FROM item;"
+`
 
-应输出 4 张表：`flash_order`、`flash_sale`、`item`、`user`。
-
----
-
+应返回 7 件商品，中文名称显示正常。
 ## 4. 后端启动
 
 ### 4.1 编译项目

@@ -16,6 +16,7 @@ import com.flashsale.model.enums.OrderStatusEnum;
 import com.flashsale.model.vo.FlashOrderVO;
 import com.flashsale.service.FlashOrderService;
 import com.flashsale.service.message.FlashOrderMessage;
+import com.flashsale.common.util.SnowflakeIdGenerator;
 import com.flashsale.service.producer.FlashOrderProducer;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -46,22 +47,26 @@ public class FlashOrderServiceImpl implements FlashOrderService {
     private final StringRedisTemplate stringRedisTemplate;
     private final DefaultRedisScript<Long> stockDeductScript;
     private final FlashOrderProducer flashOrderProducer;
+    private final SnowflakeIdGenerator snowflakeIdGenerator;
 
     public FlashOrderServiceImpl(FlashOrderMapper flashOrderMapper,
                                  FlashSaleMapper flashSaleMapper,
                                  StringRedisTemplate stringRedisTemplate,
                                  DefaultRedisScript<Long> stockDeductScript,
-                                 FlashOrderProducer flashOrderProducer) {
+                                 FlashOrderProducer flashOrderProducer,
+                                 SnowflakeIdGenerator snowflakeIdGenerator) {
         this.flashOrderMapper = flashOrderMapper;
         this.flashSaleMapper = flashSaleMapper;
         this.stringRedisTemplate = stringRedisTemplate;
         this.stockDeductScript = stockDeductScript;
         this.flashOrderProducer = flashOrderProducer;
+        this.snowflakeIdGenerator = snowflakeIdGenerator;
     }
 
     @Override
     public FlashOrder createOrder(FlashOrder order) {
-        flashOrderMapper.insert(order);
+        order.setId(snowflakeIdGenerator.nextId());
+        flashOrderMapper.insertWithId(order);
         return order;
     }
 
@@ -406,8 +411,9 @@ public class FlashOrderServiceImpl implements FlashOrderService {
             throw new BusinessException(ResultCode.FLASH_SOLD_OUT, "DB 库存不足");
         }
 
-        // 创建订单（同一事务，失败则 deductStock 一并回滚）
-        flashOrderMapper.insert(order);
+        // 生成雪花 ID + 创建订单（同一事务，失败则 deductStock 一并回滚）
+        order.setId(snowflakeIdGenerator.nextId());
+        flashOrderMapper.insertWithId(order);
         log.info("[异步下单] 事务提交: deductStock + createOrder, orderId={}, messageKey={}",
                 order.getId(), order.getMessageKey());
         return order;
