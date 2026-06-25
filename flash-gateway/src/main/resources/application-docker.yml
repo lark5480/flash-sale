@@ -1,0 +1,18 @@
+# ==================== Docker 容器环境配置 ====================
+spring:
+  cloud:
+    nacos:
+      discovery:
+        server-addr: nacos:8848
+        namespace: 4b56aa8f-8ca1-484a-9189-607d0fd733ab
+        username: nacos
+        password: nacos
+
+jwt:
+  secret: flash-sale-secret-key-min-256-bits-long-for-hs256
+  expiration: 1800000
+  refresh-expiration: 604800000
+
+logging:
+  level:
+    org.springframework.cloud.gateway: DEBUG

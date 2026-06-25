@@ -36,6 +36,7 @@
         <jjwt.version>0.12.3</jjwt.version>
         <redisson.version>3.24.3</redisson.version>
         <rocketmq-spring-boot.version>2.3.0</rocketmq-spring-boot.version>
+        <caffeine.version>3.1.8</caffeine.version>
         <hutool.version>5.8.25</hutool.version>
     </properties>
 
@@ -133,6 +134,13 @@
                 <groupId>com.flashsale</groupId>
                 <artifactId>flash-service</artifactId>
                 <version>${project.version}</version>
+            </dependency>
+
+            <!-- Caffeine -->
+            <dependency>
+                <groupId>com.github.ben-manes.caffeine</groupId>
+                <artifactId>caffeine</artifactId>
+                <version>${caffeine.version}</version>
             </dependency>
         </dependencies>
     </dependencyManagement>

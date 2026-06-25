@@ -41,3 +41,7 @@ CLAUDE.local.md
 *.jar
 *.war
 *.ear
+
+# Docker runtime data
+docker/rocketmq/store/
+docker/rocketmq/logs/
