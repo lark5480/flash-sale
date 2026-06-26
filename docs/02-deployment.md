@@ -28,19 +28,19 @@
 
 ### 2.1 启动中间件
 
-`ash
+```bash
 # 进入项目根目录
 cd flash-sale
 
 # 启动全部中间件（MySQL + Redis + Nacos + RocketMQ）
 docker compose up -d mysql redis nacos rocketmq-namesrv rocketmq-broker
-`
+```
 
 首次启动会拉取镜像，等待约 2-3 分钟。
 
 ### 2.2 验证中间件启动状态
 
-`ash
+```bash
 # 查看所有容器状态
 docker ps --format "table {{.Names}}\t{{.Status}}"
 
@@ -52,7 +52,7 @@ docker exec flash-mysql mysql -u root -proot123 -e "SELECT VERSION();"
 
 # 验证 Redis 连接
 docker exec flash-redis redis-cli ping
-`
+```
 
 **关键配置说明：**
 
@@ -64,29 +64,30 @@ docker exec flash-redis redis-cli ping
 | RocketMQ 5.3.0 NameServer | flash-rocketmq-namesrv | 127.0.0.1:9876 | - |
 | RocketMQ 5.3.0 Broker | flash-rocketmq-broker | 127.0.0.1:10911 | - |
 
-> **说明**：rokerIP1 = 127.0.0.1 配置在 docker/rocketmq/conf/broker.conf 中，确保本地 Java 应用能直接连接 Broker，而非通过 Docker 内部 IP。
+> **说明**：`brokerIP1 = 127.0.0.1` 配置在 `docker/rocketmq/conf/broker.conf` 中，确保本地 Java 应用能直接连接 Broker，而非通过 Docker 内部 IP。
+
+> **配置文件说明**：docker-compose 中后端服务通过 `SPRING_PROFILES_ACTIVE=docker` 启用 `application-docker.yml`（中间件地址使用容器名，如 `mysql` 而非 `127.0.0.1`）。本地手动开发时使用 `application-dev.yml`（`127.0.0.1` 直连）。
 
 ### 2.3 Nacos 命名空间初始化
 
 > **重要**：Nacos 启动后，需要手动创建一个命名空间，否则微服务无法注册。
 
 **操作步骤：**
-1. 访问 http://localhost:8848/nacos ，使用 
-acos / nacos 登录
+1. 访问 http://localhost:8848/nacos ，使用 `nacos / nacos` 登录
 2. 进入左侧菜单「命名空间」页面
 3. 点击「新建命名空间」
 4. **命名空间 ID** 填写（必须与配置一致）：
-   `
+   ```
    4b56aa8f-8ca1-484a-9189-607d0fd733ab
-   `
-5. **命名空间名称** 可自定义，例如 lash-sale-dev
+   ```
+5. **命名空间名称** 可自定义，例如 `flash-sale-dev`
 6. 点击「确定」完成创建
 
-> **注意**：命名空间 ID 是在创建时指定的，之后无法修改。如果创建时未填写 ID，Nacos 会自动生成随机 ID，此时必须删除后重新创建。该 ID 与 pplication-dev.yml 中的 spring.cloud.nacos.discovery.namespace 配置一致。
+> **注意**：命名空间 ID 是在创建时指定的，之后无法修改。如果创建时未填写 ID，Nacos 会自动生成随机 ID，此时必须删除后重新创建。该 ID 与 `application-dev.yml` 中的 `spring.cloud.nacos.discovery.namespace` 配置一致。
 
 ### 2.4 中间件管理命令
 
-`ash
+```bash
 # 停止所有中间件（保留数据卷）
 docker compose stop mysql redis nacos rocketmq-namesrv rocketmq-broker
 
@@ -98,37 +99,38 @@ docker compose rm -f mysql redis nacos rocketmq-namesrv rocketmq-broker
 
 # 完全删除容器+数据卷（所有数据丢失，谨慎使用）
 docker compose down -v
-`
+```
 ## 3. 数据库初始化
 
 ### 3.1 创建数据库
 
-`ash
+```bash
 docker exec flash-mysql mysql -u root -proot123 -e "CREATE DATABASE IF NOT EXISTS flash_sale DEFAULT CHARACTER SET utf8mb4 DEFAULT COLLATE utf8mb4_unicode_ci;"
-`
+```
 
 ### 3.2 初始化表结构和种子数据
 
-`ash
+```bash
 docker exec -i flash-mysql mysql -u root -proot123 --default-character-set=utf8mb4 flash_sale < sql/init.sql
-`
+```
 
 该脚本会完成以下操作：
 
-1. 创建 4 张核心表（user、item、lash_sale、lash_order）
+1. 创建 4 张核心表（user、item、flash_sale、flash_order）
 2. 写入 7 件商品 + 7 个秒杀活动的种子数据
 
-> **注意**：管理员账号（dmin/admin123）不需要手动创建。应用首次启动时，DataInitRunner 会自动初始化管理员账号。
+> **注意**：管理员账号（`admin/admin123`）不需要手动创建。应用首次启动时，DataInitRunner 会自动初始化管理员账号。
 > **注意**：MySQL 内部执行 SQL 时如果字符集不匹配会导致中文乱码，必须指定 --default-character-set=utf8mb4。
 
 ### 3.3 验证数据
 
-`ash
+```bash
 docker exec -i flash-mysql mysql -u root -proot123 flash_sale -e "SELECT id,name FROM item;"
-`
+```
 
 应返回 7 件商品，中文名称显示正常。
-## 4. 后端启动
+
+---
 
 ### 4.1 编译项目
 

@@ -85,9 +85,11 @@ graph TB
 - `BaseEntity` — 实体基类（id, createTime, updateTime）
 - `JwtUtil` — JWT 令牌工具类
 - `PasswordUtil` — BCrypt 密码加密
+- `SnowflakeIdGenerator` — 雪花 ID 生成器（自定义 epoch + 时钟回滚保护）
 - `RateLimit` — 接口限流注解
 - 全局异常与异常处理器
 - 常量类：`RedisConstants`、`RocketMQConstants`
+- `JacksonConfig` — 注解驱动 Long→String 序列化（解决 JS 雪花 ID 精度丢失）
 
 ### flash-model（数据模型）
 
@@ -110,7 +112,7 @@ MyBatis-Plus Mapper 接口。
 
 核心业务实现，包含服务层、配置类和 MQ 生产者/消费者。
 
-- **配置类**：`RedisConfig`、`AsyncConfig`、`MyBatisPlusConfig`
+- **配置类**：`RedisConfig`、`CacheConfig`（Caffeine 三级缓存 L1）、`IdGeneratorConfig`（雪花 ID Bean）、`AsyncConfig`（空，已迁至 MQ）
 - **DataInitRunner** — 应用启动时初始化数据的钩子
 - **FlashOrderProducer** — 秒杀下单消息生产者（syncSend 同步发送）
 - **RateLimitInterceptor** — 接口限流拦截器（Redis ZSET 滑动窗口）

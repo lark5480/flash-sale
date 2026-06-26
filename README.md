@@ -8,28 +8,31 @@
 |------|------|
 | 语言 | Java 21 |
 | 框架 | Spring Boot 3.2.0 + Spring Cloud 2023.0.0 |
-| 注册/配置中心 | Nacos |
+| 注册/配置中心 | Nacos（仅服务发现，配置本地化管理） |
 | 网关 | Spring Cloud Gateway |
 | ORM | MyBatis-Plus 3.5.5 |
 | 数据库 | MySQL 8.0 |
-| 缓存 | Redis + Redisson 3.24.3 |
+| 缓存 | Redis 7 + Caffeine 3.1.8（L1）+ Redisson 3.24.3（分布式锁） |
 | 消息队列 | RocketMQ 5.3.0 (server) + rocketmq-spring-boot-starter 2.3.0 (client) |
-| 认证 | JWT (jjwt 0.12.3) |
+| 认证 | JWT (jjwt 0.12.3, 双 Token: accessToken + refreshToken) |
 | 前端 | Vue 3 + Vite + Element Plus (管理端) |
+| 部署 | Docker Compose（8 服务编排） |
 
 ## 项目结构
 
 ```
 flash-sale
-├── flash-common        # 公共模块：统一返回、异常处理、工具类、常量
+├── flash-common        # 公共模块：统一返回、异常处理、JWT工具、雪花ID、Long→String 序列化
 ├── flash-model         # 数据模型：实体、DTO、VO、枚举
 ├── flash-mapper        # 数据访问：MyBatis-Plus Mapper
-├── flash-service       # 业务逻辑：Service 层、配置、消息生产者/消费者
-├── flash-api           # 用户端 REST API（端口 8081）
-├── flash-admin         # 管理端 REST API（端口 8082）
-├── flash-gateway       # API 网关（端口 8080）
+├── flash-service       # 业务逻辑：Service 实现、三级缓存配置、MQ 生产者/消费者
+├── flash-api           # 用户端 REST API（端口 8081，启用 MQ 消费者）
+├── flash-admin         # 管理端 REST API（端口 8082，不含 MQ 消费者隔离）
+├── flash-gateway       # Spring Cloud Gateway 网关（端口 8080）
 ├── flash-frontend      # 用户端前端（Vue 3）
 ├── flash-admin-frontend # 管理端前端（Vue 3 + Element Plus）
+├── docker              # Docker 配置文件（RocketMQ broker 配置等）
+├── docs                # 架构/部署/开发文档
 └── sql                 # 数据库初始化脚本
 ```
 
@@ -64,8 +67,15 @@ flash-sale
 
 ### 自动化
 - 秒杀活动状态自动流转（定时任务：待开始 -> 进行中 -> 已结束）
-- 订单超时自动取消（15 分钟未支付，自动归还 DB + Redis 库存）
+- 订单超时自动取消（15 分钟未支付，自动归还 DB + Redis 库存，递减用户购买计数）
 - Token 刷新
+- 启动时自动初始化默认管理员账号（admin / admin123）
+
+### 缓存策略
+- **三级缓存**：L1 Caffeine（秒级 TTL）→ L2 Redis（分钟级 TTL）→ DB 兜底回源
+- **写操作同时失效两级缓存**，读请求逐级回源并回填
+- **Redis 缓存预热**：秒杀激活时自动写入库存 + 详情缓存
+- **Redis Lua 原子扣库存**：单次 RTT 完成限购检查 + 库存扣减
 
 ## 环境依赖
 
@@ -73,24 +83,43 @@ flash-sale
 |------|------|----------|
 | JDK | 21+ | - |
 | MySQL | 8.0 | 3306 |
-| Redis | 6+ | 6379 |
+| Redis | 7 | 6379 |
 | Nacos | 2.x | 8848 |
 | RocketMQ | 5.3.0 | 9876 (NameServer) |
 | Node.js | 18+ | - |
 
 ## 快速启动
 
-### 1. 初始化数据库
+### 方式一：Docker Compose 一键部署（推荐）
+
+```bash
+# 1. 构建前端产物（Docker 后端镜像会自动编译）
+cd flash-frontend && npm install && npm run build && cd ..
+cd flash-admin-frontend && npm install && npm run build && cd ..
+
+# 2. 一键启动（中间件 + 后端 + 前端）
+docker compose up -d
+
+# 3. 初始化数据库表
+docker compose exec -T mysql mysql -uroot -proot123 flash_sale < sql/init.sql
+```
+
+> 前端产物构建一次即可，后续修改前端代码需要重新 `npm run build`。
+> 若只需中间件（本地开发后端），运行：`docker compose up -d mysql redis nacos rocketmq-namesrv rocketmq-broker`
+
+### 方式二：本地手动启动
+
+#### 1. 初始化数据库
 
 ```bash
 mysql -u root -p < sql/init.sql
 ```
 
-### 2. 启动中间件
+#### 2. 启动中间件
 
 确保 MySQL、Redis、Nacos、RocketMQ 均已启动。
 
-### 3. 启动后端服务
+#### 3. 启动后端服务
 
 ```bash
 # 编译
@@ -102,7 +131,7 @@ java -jar flash-admin/target/flash-admin-1.0.0.jar
 java -jar flash-gateway/target/flash-gateway-1.0.0.jar
 ```
 
-### 4. 启动前端
+#### 4. 启动前端
 
 ```bash
 # 用户端
