@@ -75,10 +75,11 @@ com.flashsale
 │   │   └── GlobalExceptionHandler  # 全局异常处理器
 │   ├── util                        # 工具类
 │   │   ├── JwtUtil                 # JWT 令牌工具
-│   │   └── PasswordUtil            # 密码加密工具
+│   │   ├── PasswordUtil            # 密码加密工具
+│   │   └── SnowflakeIdGenerator    # 雪花 ID 生成器（自定义 epoch + 时钟回滚保护）
 │   ├── config
 │   │   ├── MyMetaObjectHandler     # MyBatis-Plus 自动填充处理器
-│   │   └── JacksonConfig           # Jackson JSON 序列化配置
+│   │   └── JacksonConfig           # Jackson JSON 序列化配置（Long→String 解决 JS 精度丢失）
 │   ├── constant                    # 常量定义
 │   │   ├── RedisConstants          # Redis Key 与 TTL 常量
 │   │   └── RocketMQConstants       # RocketMQ Topic/Tag/Group 常量
@@ -123,8 +124,10 @@ com.flashsale
 │   │   └── FlashOrderServiceImpl
 │   ├── config                      # 配置类
 │   │   ├── RedisConfig             # RedisTemplate + Lua 脚本加载
+│   │   ├── CacheConfig             # Caffeine 三级缓存（L1）
+│   │   ├── IdGeneratorConfig       # 雪花 ID Spring Bean
 │   │   ├── MyBatisPlusConfig       # 分页插件配置
-│   │   ├── AsyncConfig             # 异步线程池配置
+│   │   ├── AsyncConfig             # 空配置（秒杀已迁至 RocketMQ）
 │   │   └── DataInitRunner          # 启动数据初始化
 │   ├── filter
 │   │   └── JwtAuthenticationFilter # Spring Security JWT 过滤器
