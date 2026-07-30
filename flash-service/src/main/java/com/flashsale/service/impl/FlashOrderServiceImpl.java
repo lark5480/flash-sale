@@ -205,16 +205,23 @@ public class FlashOrderServiceImpl implements FlashOrderService {
      */
     private void ensureRedisStock(FlashSale flashSale) {
         String stockKey = RedisConstants.FLASH_STOCK_KEY + flashSale.getId();
+        // 快速路径：key 已存在则跳过（非原子，仅用于减少 SETNX 调用）
         Boolean hasKey = stringRedisTemplate.hasKey(stockKey);
         if (Boolean.TRUE.equals(hasKey)) {
             return;
         }
-        log.info("[缓存补充] Redis 库存 Key 不存在，从 DB 加载, flashSaleId={}, stock={}",
-                flashSale.getId(), flashSale.getStock());
-        stringRedisTemplate.opsForValue().set(stockKey,
-                String.valueOf(flashSale.getStock()),
-                RedisConstants.FLASH_CACHE_TTL,
-                TimeUnit.SECONDS);
+        // 使用 SETNX 原子操作，防止多节点并发覆盖已被 Lua 扣减的库存值
+        Boolean setResult = stringRedisTemplate.opsForValue()
+                .setIfAbsent(stockKey, String.valueOf(flashSale.getStock()),
+                        RedisConstants.randomTtl(RedisConstants.FLASH_CACHE_TTL),
+                        TimeUnit.SECONDS);
+        if (Boolean.TRUE.equals(setResult)) {
+            log.info("[缓存补充] Redis 库存 Key SETNX 成功, flashSaleId={}, stock={}",
+                    flashSale.getId(), flashSale.getStock());
+        } else {
+            log.info("[缓存补充] Redis 库存 Key 已被其他节点设置, flashSaleId={}",
+                    flashSale.getId());
+        }
     }
 
     @Override

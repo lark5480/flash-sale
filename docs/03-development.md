@@ -81,7 +81,7 @@ com.flashsale
 │   │   ├── MyMetaObjectHandler     # MyBatis-Plus 自动填充处理器
 │   │   └── JacksonConfig           # Jackson JSON 序列化配置（Long→String 解决 JS 精度丢失）
 │   ├── constant                    # 常量定义
-│   │   ├── RedisConstants          # Redis Key 与 TTL 常量
+│   │   ├── RedisConstants          # Redis Key、TTL 常量与缓存防护工具方法
 │   │   └── RocketMQConstants       # RocketMQ Topic/Tag/Group 常量
 │   ├── annotation
 │   │   └── RateLimit               # 接口限流注解
@@ -420,6 +420,10 @@ Lua 脚本执行成功后 Redis 状态已变更（库存 -1，用户计数 +1）
 | `flash:msg:processed:{messageKey}` | MQ 消息幂等记录 | `RocketMQConstants.MSG_PROCESSED_KEY` |
 | `rate:limit:{key}:{userId\|ip:xxx}` | 接口限流滑动窗口（ZSET） | `RateLimitInterceptor` |
 | `flash:captcha:{captchaId}` | 算术验证码答案 | `RedisConstants.CAPTCHA_KEY` |
+| `active:list` | 进行中的秒杀活动列表缓存（L2） | `RedisConstants.ACTIVE_LIST_KEY` |
+| `item:{itemId}` | 商品详情缓存（L2） | `RedisConstants.ITEM_KEY` |
+
+> 注：所有 TTL 均使用 `randomTtl()` 方法添加 ±300s 随机偏移，防止缓存雪崩
 
 ---
 

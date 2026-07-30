@@ -62,7 +62,7 @@ graph TB
 | 微服务 | Spring Cloud Alibaba | 2023.0.1.0 | Nacos 集成 |
 | ORM | MyBatis-Plus | 3.5.5 | 数据库访问层 |
 | 数据库 | MySQL | 8.0 | 关系型数据库 |
-| 缓存 | Redis 7 + Redisson | 3.24.3 | 缓存 + 分布式锁 |
+| 缓存 | Redis 7 + Caffeine 3.1.8 + Redisson | 3.24.3 | 缓存 + 分布式锁 |
 | 消息队列 | RocketMQ Server | 5.3.0 | 异步削峰 |
 | 消息队列 | rocketmq-spring-boot-starter | 2.3.0 | MQ 客户端 |
 | 注册中心 | Nacos | v2.5.1 | 服务注册与配置中心 |
@@ -270,13 +270,17 @@ sequenceDiagram
 
 | Key 格式 | 用途 | TTL |
 |----------|------|-----|
-| `flash:stock:{flashSaleId}` | 秒杀库存计数器（Lua 脚本原子操作） | 3600s |
-| `flash:sale:{flashSaleId}` | 活动详情缓存，减少 DB 查询 | 3600s |
-| `flash:user:purchased:{flashSaleId}:{userId}` | 用户购买次数计数，防止超限购 | 3600s |
+| `flash:stock:{flashSaleId}` | 秒杀库存计数器（Lua 脚本原子操作） | 3600s ± 300s |
+| `flash:sale:{flashSaleId}` | 活动详情缓存，减少 DB 查询 | 3600s ± 300s |
+| `flash:user:purchased:{flashSaleId}:{userId}` | 用户购买次数计数，防止超限购 | 3600s ± 300s |
 | `flash:lock:{flashSaleId}` | Redisson 分布式锁，保证消费者同一活动串行处理库存 | 锁自动续期（watchdog） |
 | `flash:msg:processed:{messageKey}` | MQ 消息幂等标记（SETNX 写入） | `MSG_PROCESSED_TTL` |
 | `rate:limit:{key}:{userId\|ip:xxx}` | 接口限流滑动窗口（ZSET） | window + 1s |
 | `flash:captcha:{captchaId}` | 算术验证码答案 | 180s |
+| `active:list` | 进行中的秒杀活动列表缓存（L2） | 3600s ± 300s |
+| `item:{itemId}` | 商品详情缓存（L2） | 3600s ± 300s |
+
+> 注：所有 TTL 均使用 `randomTtl()` 方法添加 ±300s 随机偏移，防止缓存雪崩
 
 ---
 

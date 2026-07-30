@@ -19,6 +19,14 @@ spring:
     redis:
       host: 127.0.0.1
       port: 6379
+      redisson:
+        config: |
+          threads: 16
+          nettyThreads: 32
+          singleServerConfig:
+            address: "redis://127.0.0.1:6379"
+            connectionMinimumIdleSize: 8
+            connectionPoolSize: 32
 
 mybatis-plus:
   configuration:

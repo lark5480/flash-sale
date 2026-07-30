@@ -72,10 +72,11 @@ flash-sale
 - 启动时自动初始化默认管理员账号（admin / admin123）
 
 ### 缓存策略
-- **三级缓存**：L1 Caffeine（秒级 TTL）→ L2 Redis（分钟级 TTL）→ DB 兜底回源
+- **三级缓存**：L1 Caffeine（秒级 TTL）→ L2 Redis（分钟级 TTL）→ DB 兜底回源，活动列表同样走三级缓存
 - **写操作同时失效两级缓存**，读请求逐级回源并回填
+- **缓存三级防护**：穿透防护——空值标记（`@@NULL@@`）+ 短 TTL 兜底；雪崩防护——`randomTtl()` 基于 `ThreadLocalRandom` 叠加 ±300s 随机偏移；击穿防护——Caffeine `get(key, fn)` per-key 同步 + Redis `setIfAbsent`（SETNX）原子回填
 - **Redis 缓存预热**：秒杀激活时自动写入库存 + 详情缓存
-- **Redis Lua 原子扣库存**：单次 RTT 完成限购检查 + 库存扣减
+- **Redis SETNX 原子扣库存**：单次 RTT 完成限购检查 + 库存扣减
 
 ## 环境依赖
 

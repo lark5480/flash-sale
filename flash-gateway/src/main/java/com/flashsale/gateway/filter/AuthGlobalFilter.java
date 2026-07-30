@@ -5,6 +5,7 @@ import org.springframework.cloud.gateway.filter.GatewayFilterChain;
 import org.springframework.cloud.gateway.filter.GlobalFilter;
 import org.springframework.core.Ordered;
 import org.springframework.http.HttpHeaders;
+import org.springframework.http.HttpMethod;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Component;
 import org.springframework.web.server.ServerWebExchange;
@@ -22,11 +23,17 @@ public class AuthGlobalFilter implements GlobalFilter, Ordered {
             "/api/auth/refresh",
             "/api/auth/captcha",
             "/admin/auth/login",
-            "/admin/auth/captcha"
+            "/admin/auth/captcha",
+            "/api/flash-sale/active"
     );
 
     private static final Set<String> SKIP_PREFIXES = Set.of(
             "/images/"
+    );
+
+    /** 仅 GET 请求可跳过认证的路径前缀（秒杀详情 /api/flash-sale/{id}） */
+    private static final Set<String> GET_SKIP_PREFIXES = Set.of(
+            "/api/flash-sale/"
     );
 
     private final JwtUtil jwtUtil;
@@ -46,6 +53,15 @@ public class AuthGlobalFilter implements GlobalFilter, Ordered {
         for (String prefix : SKIP_PREFIXES) {
             if (path.startsWith(prefix)) {
                 return chain.filter(exchange);
+            }
+        }
+
+        // GET 请求的公开查询接口（如秒杀详情 /api/flash-sale/{id}）
+        if (exchange.getRequest().getMethod() == HttpMethod.GET) {
+            for (String prefix : GET_SKIP_PREFIXES) {
+                if (path.startsWith(prefix)) {
+                    return chain.filter(exchange);
+                }
             }
         }
 

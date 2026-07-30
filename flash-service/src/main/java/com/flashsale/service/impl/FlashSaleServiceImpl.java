@@ -39,7 +39,7 @@ import com.github.benmanes.caffeine.cache.Cache;
  */
 @Service
 public class FlashSaleServiceImpl implements FlashSaleService {
-    
+
     private static final Logger log = LoggerFactory.getLogger(FlashSaleServiceImpl.class);
 
     private final FlashSaleMapper flashSaleMapper;
@@ -106,30 +106,41 @@ public class FlashSaleServiceImpl implements FlashSaleService {
 
     @Override
     public List<FlashSaleVO> getActiveFlashSales() {
-        String cacheKey = "active:list";
+        String cacheKey = RedisConstants.ACTIVE_FLASH_SALE_LIST_KEY;
+        String redisKey = RedisConstants.ACTIVE_FLASH_SALE_LIST_KEY;
 
-        // 1. L1 Caffeine
-        String cached = activeFlashSaleCache.getIfPresent(cacheKey);
-        if (cached != null) {
-            try {
-                return objectMapper.readValue(cached,
-                        objectMapper.getTypeFactory().constructCollectionType(List.class, FlashSaleVO.class));
-            } catch (Exception e) {
-                log.warn("[Caffeine] 活动列表反序列化失败，回源DB, error={}", e.getMessage());
-            }
-        }
-
-        // 2. DB 回源（活动列表变化频繁，不走 Redis 缓存）
-        List<FlashSaleVO> result = loadActiveFlashSalesFromDb();
-
-        // 回填 Caffeine
         try {
-            activeFlashSaleCache.put(cacheKey, objectMapper.writeValueAsString(result));
-        } catch (Exception e) {
-            log.warn("[Caffeine] 活动列表写入失败, error={}", e.getMessage());
-        }
+            // 使用 Caffeine get(key, function) 实现 per-key 同步，防止缓存击穿
+            String json = activeFlashSaleCache.get(cacheKey, key -> {
+                // L2 Redis
+                String redisJson = stringRedisTemplate.opsForValue().get(redisKey);
+                if (redisJson != null) {
+                    return redisJson;
+                }
 
-        return result;
+                // L3 DB 回源
+                List<FlashSaleVO> result = loadActiveFlashSalesFromDb();
+                String resultJson;
+                try {
+                    resultJson = objectMapper.writeValueAsString(result);
+                } catch (Exception e) {
+                    throw new RuntimeException("JSON序列化失败", e);
+                }
+
+                // 回填 Redis
+                stringRedisTemplate.opsForValue().set(redisKey, resultJson,
+                        RedisConstants.randomTtl(30), TimeUnit.SECONDS);
+
+                return resultJson;
+            });
+
+            return objectMapper.readValue(json,
+                    objectMapper.getTypeFactory().constructCollectionType(List.class, FlashSaleVO.class));
+        } catch (Exception e) {
+            log.error("[缓存] getActiveFlashSales 异常, error={}", e.getMessage(), e);
+            // 降级：直接查 DB
+            return loadActiveFlashSalesFromDb();
+        }
     }
 
     private List<FlashSaleVO> loadActiveFlashSalesFromDb() {
@@ -180,14 +191,14 @@ public class FlashSaleServiceImpl implements FlashSaleService {
             String stockKey = RedisConstants.FLASH_STOCK_KEY + saleId;
             stringRedisTemplate.opsForValue().set(stockKey,
                     String.valueOf(flashSale.getStock()),
-                    RedisConstants.FLASH_CACHE_TTL,
+                    RedisConstants.randomTtl(RedisConstants.FLASH_CACHE_TTL),
                     TimeUnit.SECONDS);
 
             String saleKey = RedisConstants.FLASH_SALE_KEY + saleId;
             FlashSaleVO vo = buildFlashSaleVO(flashSale);
             stringRedisTemplate.opsForValue().set(saleKey,
                     objectMapper.writeValueAsString(vo),
-                    RedisConstants.FLASH_CACHE_TTL,
+                    RedisConstants.randomTtl(RedisConstants.FLASH_CACHE_TTL),
                     TimeUnit.SECONDS);
 
             log.info("[缓存预热] 秒杀活动数据已加载到 Redis, id={}, stock={}", saleId, flashSale.getStock());
@@ -201,48 +212,55 @@ public class FlashSaleServiceImpl implements FlashSaleService {
         String caffeineKey = "detail:" + id;
         String redisKey = RedisConstants.FLASH_SALE_KEY + id;
 
-        // 1. L1 Caffeine
-        String cachedJson = flashSaleDetailCache.getIfPresent(caffeineKey);
-        if (cachedJson != null) {
-            try {
-                return objectMapper.readValue(cachedJson, FlashSaleVO.class);
-            } catch (Exception e) {
-                log.warn("[Caffeine] 详情反序列化失败, id={}, error={}", id, e.getMessage());
-            }
-        }
-
-        // 2. L2 Redis
-        String redisJson = stringRedisTemplate.opsForValue().get(redisKey);
-        if (redisJson != null) {
-            try {
-                FlashSaleVO vo = objectMapper.readValue(redisJson, FlashSaleVO.class);
-                // 回填 Caffeine（异步写入，不阻塞）
-                flashSaleDetailCache.put(caffeineKey, redisJson);
-                return vo;
-            } catch (Exception e) {
-                log.warn("[Redis] 详情反序列化失败, id={}, error={}", id, e.getMessage());
-                stringRedisTemplate.delete(redisKey);
-            }
-        }
-
-        // 3. DB 回源
-        FlashSale flashSale = flashSaleMapper.selectById(id);
-        if (flashSale == null) {
-            throw new BusinessException(ResultCode.NOT_FOUND, "flash sale not found");
-        }
-        FlashSaleVO vo = buildFlashSaleVO(flashSale);
-
-        // 4. 回填两级缓存
         try {
-            String json = objectMapper.writeValueAsString(vo);
-            flashSaleDetailCache.put(caffeineKey, json);
-            stringRedisTemplate.opsForValue().set(redisKey, json,
-                    RedisConstants.FLASH_CACHE_TTL, TimeUnit.SECONDS);
-        } catch (Exception e) {
-            log.warn("[缓存回填] 写入失败, id={}, error={}", id, e.getMessage());
-        }
+            // 使用 Caffeine get(key, function) 实现 per-key 同步，防止缓存击穿
+            String json = flashSaleDetailCache.get(caffeineKey, key -> {
+                // L2 Redis
+                String redisJson = stringRedisTemplate.opsForValue().get(redisKey);
+                if (redisJson != null) {
+                    // 缓存穿透防护：命中空值标记
+                    if (RedisConstants.CACHE_NULL.equals(redisJson)) {
+                        return RedisConstants.CACHE_NULL;
+                    }
+                    return redisJson;
+                }
 
-        return vo;
+                // L3 DB 回源
+                FlashSale flashSale = flashSaleMapper.selectById(id);
+                if (flashSale == null) {
+                    // 缓存穿透防护：写入空值标记到 Redis
+                    stringRedisTemplate.opsForValue().set(redisKey, RedisConstants.CACHE_NULL,
+                            RedisConstants.NULL_CACHE_TTL, TimeUnit.SECONDS);
+                    return RedisConstants.CACHE_NULL;
+                }
+                FlashSaleVO vo = buildFlashSaleVO(flashSale);
+                String voJson;
+                try {
+                    voJson = objectMapper.writeValueAsString(vo);
+                } catch (Exception e) {
+                    throw new RuntimeException("JSON序列化失败", e);
+                }
+
+                // 回填 Redis
+                stringRedisTemplate.opsForValue().set(redisKey, voJson,
+                        RedisConstants.randomTtl(RedisConstants.FLASH_CACHE_TTL),
+                        TimeUnit.SECONDS);
+
+                return voJson;
+            });
+
+            // 判断是否为空值标记
+            if (RedisConstants.CACHE_NULL.equals(json)) {
+                throw new BusinessException(ResultCode.NOT_FOUND, "flash sale not found");
+            }
+
+            return objectMapper.readValue(json, FlashSaleVO.class);
+        } catch (BusinessException e) {
+            throw e;
+        } catch (Exception e) {
+            log.error("[缓存] getDetailWithItem 异常, id={}, error={}", id, e.getMessage(), e);
+            throw new BusinessException(ResultCode.SYSTEM_ERROR, "系统繁忙，请稍后重试");
+        }
     }
 
     @Override
@@ -269,9 +287,10 @@ public class FlashSaleServiceImpl implements FlashSaleService {
     private void evictCache(Long saleId) {
         String caffeineKey = "detail:" + saleId;
         flashSaleDetailCache.invalidate(caffeineKey);
-        activeFlashSaleCache.invalidate("active:list");
+        activeFlashSaleCache.invalidate(RedisConstants.ACTIVE_FLASH_SALE_LIST_KEY);
         stringRedisTemplate.delete(RedisConstants.FLASH_SALE_KEY + saleId);
         stringRedisTemplate.delete(RedisConstants.FLASH_STOCK_KEY + saleId);
+        stringRedisTemplate.delete(RedisConstants.ACTIVE_FLASH_SALE_LIST_KEY);
     }
 
     private FlashSaleVO buildFlashSaleVO(FlashSale flashSale) {

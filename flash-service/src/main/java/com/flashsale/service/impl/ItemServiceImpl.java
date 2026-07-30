@@ -81,46 +81,55 @@ public class ItemServiceImpl implements ItemService {
         String caffeineKey = "item:" + id;
         String redisKey = RedisConstants.ITEM_CACHE_KEY + id;
 
-        // 1. L1 Caffeine
-        String cachedJson = itemCache.getIfPresent(caffeineKey);
-        if (cachedJson != null) {
-            try {
-                return objectMapper.readValue(cachedJson, Item.class);
-            } catch (Exception e) {
-                log.warn("[Caffeine] 商品反序列化失败, id={}, error={}", id, e.getMessage());
-            }
-        }
-
-        // 2. L2 Redis
-        String redisJson = stringRedisTemplate.opsForValue().get(redisKey);
-        if (redisJson != null) {
-            try {
-                Item item = objectMapper.readValue(redisJson, Item.class);
-                itemCache.put(caffeineKey, redisJson);
-                return item;
-            } catch (Exception e) {
-                log.warn("[Redis] 商品反序列化失败, id={}, error={}", id, e.getMessage());
-                stringRedisTemplate.delete(redisKey);
-            }
-        }
-
-        // 3. DB 回源
-        Item item = itemMapper.selectById(id);
-        if (item == null) {
-            throw new BusinessException(ResultCode.NOT_FOUND, "item not found");
-        }
-
-        // 4. 回填两级缓存
         try {
-            String json = objectMapper.writeValueAsString(item);
-            itemCache.put(caffeineKey, json);
-            stringRedisTemplate.opsForValue().set(redisKey, json,
-                    RedisConstants.ITEM_CACHE_TTL, TimeUnit.SECONDS);
-        } catch (Exception e) {
-            log.warn("[缓存回填] 商品写入失败, id={}, error={}", id, e.getMessage());
-        }
+            // 使用 Caffeine get(key, function) 实现 per-key 同步，防止缓存击穿
+            String json = itemCache.get(caffeineKey, key -> {
+                // L2 Redis
+                String redisJson = stringRedisTemplate.opsForValue().get(redisKey);
+                if (redisJson != null) {
+                    // 缓存穿透防护：命中空值标记
+                    if (RedisConstants.CACHE_NULL.equals(redisJson)) {
+                        return RedisConstants.CACHE_NULL;
+                    }
+                    return redisJson;
+                }
 
-        return item;
+                // L3 DB 回源
+                Item item = itemMapper.selectById(id);
+                if (item == null) {
+                    // 缓存穿透防护：写入空值标记到 Redis
+                    stringRedisTemplate.opsForValue().set(redisKey, RedisConstants.CACHE_NULL,
+                            RedisConstants.NULL_CACHE_TTL, TimeUnit.SECONDS);
+                    return RedisConstants.CACHE_NULL;
+                }
+
+                String itemJson;
+                try {
+                    itemJson = objectMapper.writeValueAsString(item);
+                } catch (Exception e) {
+                    throw new RuntimeException("JSON序列化失败", e);
+                }
+
+                // 回填 Redis
+                stringRedisTemplate.opsForValue().set(redisKey, itemJson,
+                        RedisConstants.randomTtl(RedisConstants.ITEM_CACHE_TTL),
+                        TimeUnit.SECONDS);
+
+                return itemJson;
+            });
+
+            // 判断是否为空值标记
+            if (RedisConstants.CACHE_NULL.equals(json)) {
+                throw new BusinessException(ResultCode.NOT_FOUND, "item not found");
+            }
+
+            return objectMapper.readValue(json, Item.class);
+        } catch (BusinessException e) {
+            throw e;
+        } catch (Exception e) {
+            log.error("[缓存] getItemById 异常, id={}, error={}", id, e.getMessage(), e);
+            throw new BusinessException(ResultCode.SYSTEM_ERROR, "系统繁忙，请稍后重试");
+        }
     }
 
     @Override
