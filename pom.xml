@@ -142,6 +142,13 @@
                 <artifactId>caffeine</artifactId>
                 <version>${caffeine.version}</version>
             </dependency>
+
+            <!--
+               注意：以下依赖由 BOM 管理版本，无需在此声明：
+               - spring-boot-starter-actuator / micrometer-registry-prometheus → spring-boot-starter-parent
+               - spring-cloud-starter-alibaba-sentinel → spring-cloud-alibaba-dependencies
+               在子模块 pom 中直接引用即可，无需 <version>。
+            -->
         </dependencies>
     </dependencyManagement>
 

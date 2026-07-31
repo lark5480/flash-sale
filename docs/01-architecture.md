@@ -50,6 +50,9 @@ graph TB
 
 **请求流转路径：** 浏览器 → Vite Dev Server（开发环境代理） → Gateway（统一入口、鉴权、路由转发） → 后端业务服务 → 中间件。
 
+```
+**监控数据流：** 应用暴露 `/actuator/prometheus` 端点 → Prometheus 每 15s 拉取（Pull）→ Grafana 连接 Prometheus 查询展示 → Sentinel Dashboard 动态推送流控/熔断规则。
+
 ---
 
 ## 2. 技术栈
@@ -62,7 +65,7 @@ graph TB
 | 微服务 | Spring Cloud Alibaba | 2023.0.1.0 | Nacos 集成 |
 | ORM | MyBatis-Plus | 3.5.5 | 数据库访问层 |
 | 数据库 | MySQL | 8.0 | 关系型数据库 |
-| 缓存 | Redis 7 + Redisson | 3.24.3 | 缓存 + 分布式锁 |
+| 缓存 | Redis 7 + Caffeine 3.1.8 + Redisson | 3.24.3 | 缓存 + 分布式锁 |
 | 消息队列 | RocketMQ Server | 5.3.0 | 异步削峰 |
 | 消息队列 | rocketmq-spring-boot-starter | 2.3.0 | MQ 客户端 |
 | 注册中心 | Nacos | v2.5.1 | 服务注册与配置中心 |
@@ -70,6 +73,10 @@ graph TB
 | 前端（用户端） | Vue 3 + Vite | - | 用户前台 SPA |
 | 前端（管理端） | Vue 3 + Element Plus | - | 管理后台 SPA |
 | 容器化 | Docker | - | 中间件部署 |
+| 监控采集 | Prometheus | v2.53.0 | 时序数据库 + 告警引擎（拉模式） |
+| 监控可视化 | Grafana | 11.1.0 | 仪表盘可视化（连接 Prometheus 数据源） |
+| 熔断降级 | Sentinel | 1.8.8 | 业务层流控/熔断/系统保护（Dashboard 动态推送规则） |
+| 节点指标 | Node Exporter | v1.8.1 | 暴露宿主机 CPU/内存/磁盘指标 |
 
 ---
 
@@ -270,13 +277,17 @@ sequenceDiagram
 
 | Key 格式 | 用途 | TTL |
 |----------|------|-----|
-| `flash:stock:{flashSaleId}` | 秒杀库存计数器（Lua 脚本原子操作） | 3600s |
-| `flash:sale:{flashSaleId}` | 活动详情缓存，减少 DB 查询 | 3600s |
-| `flash:user:purchased:{flashSaleId}:{userId}` | 用户购买次数计数，防止超限购 | 3600s |
+| `flash:stock:{flashSaleId}` | 秒杀库存计数器（Lua 脚本原子操作） | 3600s ± 300s |
+| `flash:sale:{flashSaleId}` | 活动详情缓存，减少 DB 查询 | 3600s ± 300s |
+| `flash:user:purchased:{flashSaleId}:{userId}` | 用户购买次数计数，防止超限购 | 3600s ± 300s |
 | `flash:lock:{flashSaleId}` | Redisson 分布式锁，保证消费者同一活动串行处理库存 | 锁自动续期（watchdog） |
 | `flash:msg:processed:{messageKey}` | MQ 消息幂等标记（SETNX 写入） | `MSG_PROCESSED_TTL` |
 | `rate:limit:{key}:{userId\|ip:xxx}` | 接口限流滑动窗口（ZSET） | window + 1s |
 | `flash:captcha:{captchaId}` | 算术验证码答案 | 180s |
+| `active:list` | 进行中的秒杀活动列表缓存（L2） | 3600s ± 300s |
+| `item:{itemId}` | 商品详情缓存（L2） | 3600s ± 300s |
+
+> 注：所有 TTL 均使用 `randomTtl()` 方法添加 ±300s 随机偏移，防止缓存雪崩
 
 ---
 
@@ -369,3 +380,124 @@ public class FlashOrderConsumer {
 | flash-admin | `flash.flash.consumer.enabled` | `false` | 否 — 不创建消费者 Bean |
 
 这样保证了只有 `flash-api` 实例（可水平扩展）消费秒杀订单消息，`flash-admin` 专注于管理功能和定时任务调度，两者职责清晰、互不干扰。
+
+---
+
+## 10. 可观测性（监控栈）
+
+项目采用 **Spring Boot Actuator → Micrometer → Prometheus → Grafana** 标准监控链路，配合 Sentinel Dashboard 实现熔断降级。
+
+### 10.1 监控架构
+
+```
+应用（flash-api / flash-admin）
+  ↓ 暴露 /actuator/prometheus 端点
+Prometheus (:9090) ← 每 15s 拉取（Pull）
+  ↓ 存储时序数据
+Grafana (:3000) ← 查询 + 可视化大盘
+
+Sentinel Dashboard (:8718) ← 动态推送流控/熔断规则
+  ↓ AOP 环绕
+FlashOrderServiceImpl.purchase()
+```
+
+### 10.2 核心组件
+
+| 组件 | 端口 | 地址 | 职责 |
+|------|------|------|------|
+| Prometheus | 9090 | http://localhost:9090 | 拉取 + 存储指标，PromQL 查询 |
+| Grafana | 3000 | http://localhost:3000（admin/admin） | 可视化大盘，连接 Prometheus 数据源 |
+| Sentinel Dashboard | 8718 | http://localhost:8718（sentinel/sentinel） | 动态推送流控/熔断规则，实时监控 |
+| Node Exporter | 9100 | — | 暴露宿主机 CPU/内存/磁盘指标 |
+
+### 10.3 启动监控栈
+
+```bash
+# 启动全部监控服务
+docker compose up -d prometheus grafana node-exporter sentinel-dashboard
+
+# 或和中间件一起启动
+docker compose up -d mysql redis nacos rocketmq-namesrv rocketmq-broker prometheus grafana node-exporter sentinel-dashboard
+```
+
+### 10.4 关键配置
+
+**application.yml（flash-api / flash-admin 通用）**：
+
+```yaml
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,prometheus,metrics,env,beans
+  metrics:
+    tags:
+      application: ${spring.application.name}  # 区分 flash-api / flash-admin
+    distribution:
+      # ★ 关键：暴露 histogram bucket，否则 P99 计算为 "No data"
+      percentiles-histogram:
+        http.server.requests: true
+```
+
+**⚠️ 核心坑**：P99 分位数计算依赖 `_bucket` 指标，Spring Boot 默认只暴露 `_count` / `_sum`。不配置 `percentiles-histogram: true` 会导致 Grafana P99 面板显示 "No data"。
+
+### 10.5 自定义业务指标
+
+`FlashSaleMetrics` 注册三个指标：
+
+| 指标名 | 类型 | 说明 |
+|--------|------|------|
+| `flashsale.order.success` | Counter | 下单成功次数 |
+| `flashsale.order.fail` | Counter | 下单失败次数 |
+| `flashsale.order.duration` | Timer | 下单处理耗时（含 SLO 分桶：50ms/100ms/500ms/1s/5s + 百分位直方图） |
+
+埋点在 `FlashOrderController.purchase()` 中调用（Controller 层），用户调一次下单接口就统计一次。
+
+### 10.6 Grafana 看板
+
+Dashboard JSON 通过 **Provisioning 自动加载**（版本控制，重启不丢失）：
+
+```
+docker/grafana/
+├── provisioning/
+│   ├── datasources/prometheus.yml    # 自动注册 Prometheus 数据源
+│   └── dashboards/dashboards.yml     # Dashboard Provider 配置
+└── dashboards/
+    └── flash-sale-overview.json      # 看板定义（JVM / HTTP / 业务指标）
+```
+
+看板包含 4 行：Overview（6 个 stat 卡片）→ Business Metrics → HTTP Metrics → JVM & System。
+
+### 10.7 Sentinel 熔断降级
+
+`FlashOrderServiceImpl.purchase()` 标注 `@SentinelResource`：
+
+```java
+@SentinelResource(
+    value = "flashSale_purchase",
+    blockHandler = "purchaseBlock",   // 流控/熔断时调用
+    fallback = "purchaseFallback"   // 业务异常时调用
+)
+```
+
+**与 @RateLimit 的区别**：
+
+| 维度 | @RateLimit | Sentinel |
+|------|-----------|----------|
+| 作用层 | 控制层（Web MVC Interceptor） | 业务层（AOP 环绕 Service 方法） |
+| 实现 | Redis ZSET 滑动窗口 | Sentinel 核心引擎 |
+| 用途 | 防刷 / 防撞库 | 流量控制 + 熔断降级 |
+
+**熔断触发验证**：Dashboard 实时监控看熔断状态（CLOSED → OPEN）；触发时请求不走 `purchase()` 方法体，直接进 `purchaseBlock()`。
+
+### 10.8 常见坑
+
+| 现象 | 原因 | 解决 |
+|------|------|------|
+| Grafana 面板 "No data" | Prometheus Targets DOWN / 指标不存在 / 时间范围不对 | 按顺序排查：targets → graph → actuator → 时间范围 |
+| P99 面板 "No data" | 缺少 `_bucket` 指标 | 配 `percentiles-histogram: true` |
+| Prometheus 拉不到本地应用 | 容器内 localhost 指向容器自身 | Prometheus targets 使用容器名（api:8081, admin:8082），本地开发需手动改为 host.docker.internal |
+| Grafana "Failed to upgrade legacy queries" | Dashboard JSON 用旧 `rows` 格式 | 重写为扁平 `panels` 格式 |
+| Sentinel 规则重启丢失 | 默认内存存储 | 生产环境接 Nacos 持久化 |
+
+> 详细使用指南见 Obsidian 笔记：`Prometheus 从入门到排查.md`、`Grafana 看板配置实战.md`、`Sentinel Dashboard 使用指南.md`。

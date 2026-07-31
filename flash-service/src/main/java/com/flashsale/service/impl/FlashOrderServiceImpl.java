@@ -1,5 +1,7 @@
 package com.flashsale.service.impl;
 
+import com.alibaba.csp.sentinel.annotation.SentinelResource;
+import com.alibaba.csp.sentinel.slots.block.BlockException;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.core.metadata.IPage;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
@@ -128,73 +130,105 @@ public class FlashOrderServiceImpl implements FlashOrderService {
      * 4. 立即返回"处理中"——DB 落库由 FlashOrderConsumer 异步完成
      */
     @Override
+    @SentinelResource(
+            value = "flashSale_purchase",
+            blockHandler = "purchaseBlock",
+            fallback = "purchaseFallback"
+    )
     public FlashOrderVO purchase(Long flashSaleId, Long userId) {
         // ========== 1. DB 基础校验 ==========
-        FlashSale flashSale = flashSaleMapper.selectById(flashSaleId);
-        if (flashSale == null) {
-            throw new BusinessException(ResultCode.NOT_FOUND, "秒杀活动不存在");
+            FlashSale flashSale = flashSaleMapper.selectById(flashSaleId);
+            if (flashSale == null) {
+                throw new BusinessException(ResultCode.NOT_FOUND, "秒杀活动不存在");
+            }
+            if (!flashSale.getStatus().equals(FlashSaleStatusEnum.ACTIVE.getCode())) {
+                throw new BusinessException(ResultCode.FLASH_NOT_STARTED);
+            }
+
+            LocalDateTime now = LocalDateTime.now();
+            if (now.isBefore(flashSale.getStartTime())) {
+                throw new BusinessException(ResultCode.FLASH_NOT_STARTED);
+            }
+            if (now.isAfter(flashSale.getEndTime())) {
+                throw new BusinessException(ResultCode.FLASH_ENDED);
+            }
+
+            // 确保 Redis 缓存存在
+            ensureRedisStock(flashSale);
+
+            // ========== 2. Redis Lua 原子扣库存 ==========
+            String stockKey = RedisConstants.FLASH_STOCK_KEY + flashSaleId;
+            String userKey = RedisConstants.FLASH_USER_PURCHASED_KEY + flashSaleId + ":" + userId;
+            Long luaResult = stringRedisTemplate.execute(
+                    stockDeductScript,
+                    List.of(stockKey, userKey),
+                    String.valueOf(flashSale.getLimitPerUser()),
+                    String.valueOf(RedisConstants.FLASH_CACHE_TTL)
+            );
+
+            if (luaResult == null || luaResult == -1) {
+                log.warn("[秒杀下单] Redis 库存不足, flashSaleId={}, userId={}", flashSaleId, userId);
+                throw new BusinessException(ResultCode.FLASH_SOLD_OUT);
+            }
+            if (luaResult == 0) {
+                log.warn("[秒杀下单] 用户超过限购, flashSaleId={}, userId={}", flashSaleId, userId);
+                throw new BusinessException(ResultCode.FLASH_REPEAT);
+            }
+
+            log.info("[秒杀下单] Redis 预扣成功, flashSaleId={}, userId={}", flashSaleId, userId);
+
+            // ========== 3. 生成幂等键 + 发送 MQ 消息 ==========
+            // 格式：flashSaleId_userId_timestamp，保证同一用户同场秒杀的消息唯一
+            String messageKey = flashSaleId + "_" + userId + "_" + System.currentTimeMillis();
+
+            FlashOrderMessage message = new FlashOrderMessage(
+                    messageKey, flashSaleId, userId,
+                    flashSale.getItemId(), flashSale.getFlashPrice()
+            );
+            try {
+                flashOrderProducer.sendCreateOrderMessage(message);
+            } catch (Exception e) {
+                log.error("[秒杀下单] MQ 发送失败，回滚 Redis 库存, flashSaleId={}, userId={}", flashSaleId, userId, e);
+                // 回滚 Redis 库存
+                stringRedisTemplate.opsForValue().increment(stockKey);
+                stringRedisTemplate.opsForValue().decrement(userKey);
+                throw new BusinessException(ResultCode.SYSTEM_ERROR, "系统繁忙，请稍后重试");
+            }
+
+            // ========== 4. 立即返回"处理中" ==========
+            FlashOrderVO vo = new FlashOrderVO();
+            vo.setFlashSaleId(flashSaleId);
+            vo.setUserId(userId);
+            // 返回 messageKey，客户端据此轮询订单状态
+            vo.setMessageKey(messageKey);
+            return vo;
+    }
+
+    /**
+     * Sentinel 流控/降级处理
+     * <p>
+     * 当 purchase() 触发 Sentinel 流控规则或熔断规则时，执行此方法。
+     */
+    public FlashOrderVO purchaseBlock(Long flashSaleId, Long userId, BlockException ex) {
+        log.warn("[Sentinel] 下单被限流降级, flashSaleId={}, userId={}, rule={}",
+                flashSaleId, userId, ex.getRule() != null ? ex.getRule().getLimitApp() : "unknown");
+        throw new BusinessException(ResultCode.RATE_LIMITED, "系统繁忙，请稍后重试");
+    }
+
+    /**
+     * Sentinel 业务异常兜底
+     * <p>
+     * 当 purchase() 抛出未捕获异常时，执行此方法。
+     * 业务异常（BusinessException）直接抛出，不包装；系统异常包装为 SYSTEM_ERROR。
+     */
+    public FlashOrderVO purchaseFallback(Long flashSaleId, Long userId, Throwable t) {
+        if (t instanceof BusinessException) {
+            log.warn("[Sentinel] 业务异常直接抛出, flashSaleId={}, userId={}, msg={}",
+                    flashSaleId, userId, t.getMessage());
+            throw (BusinessException) t;
         }
-        if (!flashSale.getStatus().equals(FlashSaleStatusEnum.ACTIVE.getCode())) {
-            throw new BusinessException(ResultCode.FLASH_NOT_STARTED);
-        }
-
-        LocalDateTime now = LocalDateTime.now();
-        if (now.isBefore(flashSale.getStartTime())) {
-            throw new BusinessException(ResultCode.FLASH_NOT_STARTED);
-        }
-        if (now.isAfter(flashSale.getEndTime())) {
-            throw new BusinessException(ResultCode.FLASH_ENDED);
-        }
-
-        // 确保 Redis 缓存存在
-        ensureRedisStock(flashSale);
-
-        // ========== 2. Redis Lua 原子扣库存 ==========
-        String stockKey = RedisConstants.FLASH_STOCK_KEY + flashSaleId;
-        String userKey = RedisConstants.FLASH_USER_PURCHASED_KEY + flashSaleId + ":" + userId;
-        Long luaResult = stringRedisTemplate.execute(
-                stockDeductScript,
-                List.of(stockKey, userKey),
-                String.valueOf(flashSale.getLimitPerUser()),
-                String.valueOf(RedisConstants.FLASH_CACHE_TTL)
-        );
-
-        if (luaResult == null || luaResult == -1) {
-            log.warn("[秒杀下单] Redis 库存不足, flashSaleId={}, userId={}", flashSaleId, userId);
-            throw new BusinessException(ResultCode.FLASH_SOLD_OUT);
-        }
-        if (luaResult == 0) {
-            log.warn("[秒杀下单] 用户超过限购, flashSaleId={}, userId={}", flashSaleId, userId);
-            throw new BusinessException(ResultCode.FLASH_REPEAT);
-        }
-
-        log.info("[秒杀下单] Redis 预扣成功, flashSaleId={}, userId={}", flashSaleId, userId);
-
-        // ========== 3. 生成幂等键 + 发送 MQ 消息 ==========
-        // 格式：flashSaleId_userId_timestamp，保证同一用户同场秒杀的消息唯一
-        String messageKey = flashSaleId + "_" + userId + "_" + System.currentTimeMillis();
-
-        FlashOrderMessage message = new FlashOrderMessage(
-                messageKey, flashSaleId, userId,
-                flashSale.getItemId(), flashSale.getFlashPrice()
-        );
-        try {
-            flashOrderProducer.sendCreateOrderMessage(message);
-        } catch (Exception e) {
-            log.error("[秒杀下单] MQ 发送失败，回滚 Redis 库存, flashSaleId={}, userId={}", flashSaleId, userId, e);
-            // 回滚 Redis 库存
-            stringRedisTemplate.opsForValue().increment(stockKey);
-            stringRedisTemplate.opsForValue().decrement(userKey);
-            throw new BusinessException(ResultCode.SYSTEM_ERROR, "系统繁忙，请稍后重试");
-        }
-
-        // ========== 4. 立即返回"处理中" ==========
-        FlashOrderVO vo = new FlashOrderVO();
-        vo.setFlashSaleId(flashSaleId);
-        vo.setUserId(userId);
-        // 返回 messageKey，客户端据此轮询订单状态
-        vo.setMessageKey(messageKey);
-        return vo;
+        log.error("[Sentinel] 系统异常触发降级, flashSaleId={}, userId={}", flashSaleId, userId, t);
+        throw new BusinessException(ResultCode.SYSTEM_ERROR, "系统异常，请稍后重试");
     }
 
     /**
@@ -205,16 +239,23 @@ public class FlashOrderServiceImpl implements FlashOrderService {
      */
     private void ensureRedisStock(FlashSale flashSale) {
         String stockKey = RedisConstants.FLASH_STOCK_KEY + flashSale.getId();
+        // 快速路径：key 已存在则跳过（非原子，仅用于减少 SETNX 调用）
         Boolean hasKey = stringRedisTemplate.hasKey(stockKey);
         if (Boolean.TRUE.equals(hasKey)) {
             return;
         }
-        log.info("[缓存补充] Redis 库存 Key 不存在，从 DB 加载, flashSaleId={}, stock={}",
-                flashSale.getId(), flashSale.getStock());
-        stringRedisTemplate.opsForValue().set(stockKey,
-                String.valueOf(flashSale.getStock()),
-                RedisConstants.FLASH_CACHE_TTL,
-                TimeUnit.SECONDS);
+        // 使用 SETNX 原子操作，防止多节点并发覆盖已被 Lua 扣减的库存值
+        Boolean setResult = stringRedisTemplate.opsForValue()
+                .setIfAbsent(stockKey, String.valueOf(flashSale.getStock()),
+                        RedisConstants.randomTtl(RedisConstants.FLASH_CACHE_TTL),
+                        TimeUnit.SECONDS);
+        if (Boolean.TRUE.equals(setResult)) {
+            log.info("[缓存补充] Redis 库存 Key SETNX 成功, flashSaleId={}, stock={}",
+                    flashSale.getId(), flashSale.getStock());
+        } else {
+            log.info("[缓存补充] Redis 库存 Key 已被其他节点设置, flashSaleId={}",
+                    flashSale.getId());
+        }
     }
 
     @Override

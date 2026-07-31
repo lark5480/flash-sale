@@ -45,3 +45,7 @@ CLAUDE.local.md
 # Docker runtime data
 docker/rocketmq/store/
 docker/rocketmq/logs/
+
+# wrk 压测产物
+scripts/wrk/results/
+scripts/wrk/token.txt

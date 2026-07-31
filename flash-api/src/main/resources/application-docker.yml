@@ -5,9 +5,14 @@ spring:
     nacos:
       discovery:
         server-addr: nacos:8848
-        namespace: 4b56aa8f-8ca1-484a-9189-607d0fd733ab
+        # 使用默认 public 命名空间，重启不丢失
         username: nacos
         password: nacos
+    sentinel:
+      transport:
+        dashboard: flash-sentinel-dashboard:8858
+      eager: true
+      port: 8719
   datasource:
     url: jdbc:mysql://mysql:3306/flash_sale?useUnicode=true&characterEncoding=UTF-8&serverTimezone=Asia/Shanghai&useSSL=false
     username: root
@@ -23,7 +28,7 @@ spring:
 
 mybatis-plus:
   configuration:
-    log-impl: org.apache.ibatis.logging.stdout.StdOutImpl
+    log-impl: org.apache.ibatis.logging.slf4j.Slf4jImpl
 
 jwt:
   secret: flash-sale-secret-key-min-256-bits-long-for-hs256
@@ -42,3 +47,15 @@ flash:
   flash:
     consumer:
       enabled: true
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,prometheus,metrics,env,beans
+  endpoint:
+    health:
+      show-details: always
+  metrics:
+    tags:
+      application: ${spring.application.name}

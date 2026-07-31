@@ -81,7 +81,7 @@ com.flashsale
 │   │   ├── MyMetaObjectHandler     # MyBatis-Plus 自动填充处理器
 │   │   └── JacksonConfig           # Jackson JSON 序列化配置（Long→String 解决 JS 精度丢失）
 │   ├── constant                    # 常量定义
-│   │   ├── RedisConstants          # Redis Key 与 TTL 常量
+│   │   ├── RedisConstants          # Redis Key、TTL 常量与缓存防护工具方法
 │   │   └── RocketMQConstants       # RocketMQ Topic/Tag/Group 常量
 │   ├── annotation
 │   │   └── RateLimit               # 接口限流注解
@@ -420,6 +420,10 @@ Lua 脚本执行成功后 Redis 状态已变更（库存 -1，用户计数 +1）
 | `flash:msg:processed:{messageKey}` | MQ 消息幂等记录 | `RocketMQConstants.MSG_PROCESSED_KEY` |
 | `rate:limit:{key}:{userId\|ip:xxx}` | 接口限流滑动窗口（ZSET） | `RateLimitInterceptor` |
 | `flash:captcha:{captchaId}` | 算术验证码答案 | `RedisConstants.CAPTCHA_KEY` |
+| `active:list` | 进行中的秒杀活动列表缓存（L2） | `RedisConstants.ACTIVE_LIST_KEY` |
+| `item:{itemId}` | 商品详情缓存（L2） | `RedisConstants.ITEM_KEY` |
+
+> 注：所有 TTL 均使用 `randomTtl()` 方法添加 ±300s 随机偏移，防止缓存雪崩
 
 ---
 
@@ -647,6 +651,63 @@ ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
 |------|------|------|------|
 | `FlashSaleScheduler` | flash-admin | 每 60 秒 | 自动将到达开始时间的 PENDING 活动激活（含 Redis 缓存预热），将超过结束时间的 ACTIVE 活动结束 |
 | `OrderScheduler` | flash-admin | 每 300 秒 | 自动取消超过 15 分钟未支付的订单，并归还 DB 库存和 Redis 库存 |
+
+---
+
+## 10. 监控与可观测性
+
+### 10.1 监控链路
+
+```
+应用暴露 /actuator/prometheus 端点
+  ↓ 每 15s 拉取
+Prometheus (:9090) → 存储时序数据
+  ↓ 查询
+Grafana (:3000) → 可视化大盘
+```
+
+### 10.2 关键配置
+
+**application.yml（flash-api / flash-admin 通用）**：
+
+```yaml
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,prometheus,metrics,env,beans
+  metrics:
+    tags:
+      application: ${spring.application.name}
+    distribution:
+      # ★ 关键：暴露 histogram bucket，否则 P99 计算为 "No data"
+      percentiles-histogram:
+        http.server.requests: true
+```
+
+### 10.3 自定义业务指标
+
+`FlashSaleMetrics`（`flash-service/src/main/java/com/flashsale/service/metrics/FlashSaleMetrics.java`）：
+
+| 指标名 | 类型 | 说明 |
+|--------|------|------|
+| `flashsale.order.success` | Counter | 下单成功次数 |
+| `flashsale.order.fail` | Counter | 下单失败次数 |
+| `flashsale.order.duration` | Timer | 下单处理耗时（含 SLO 分桶：50ms/100ms/500ms/1s/5s + 百分位直方图） |
+
+埋点在 `FlashOrderController.purchase()` 中调用（Controller 层）。
+
+### 10.4 常见坑
+
+| 现象 | 原因 | 解决 |
+|------|------|------|
+| Grafana 面板 "No data" | Prometheus Targets DOWN / 指标不存在 | 检查 `http://localhost:9090/targets` |
+| P99 面板 "No data" | 缺少 `_bucket` 指标 | 配 `percentiles-histogram: true` |
+| Prometheus 拉不到本地应用 | 容器内 localhost 指向容器自身 | Prometheus targets 使用容器名（api:8081, admin:8082），本地开发需手动改为 host.docker.internal |
+| Grafana "Failed to upgrade legacy queries" | Dashboard JSON 用旧 `rows` 格式 | 重写为扁平 `panels` 格式 |
+
+> 详细使用指南见 Obsidian 笔记：`Prometheus 从入门到排查.md`、`Grafana 看板配置实战.md`、`Sentinel Dashboard 使用指南.md`。
+> 架构总览见 [01-架构文档](./01-architecture.md) 第 10 节。
 
 ---
 

@@ -1,0 +1,16 @@
+apiVersion: 1
+
+# Dashboard Provider 配置
+# 告诉 Grafana 从 /etc/grafana/dashboards 目录递归加载所有 JSON 看板。
+providers:
+  - name: 'flash-sale'
+    orgId: 1
+    folder: 'Flash Sale'
+    folderUid: 'flash-sale'
+    type: file
+    disableDeletion: false
+    updateIntervalSeconds: 30
+    allowUiUpdates: true
+    options:
+      path: /etc/grafana/dashboards
+      foldersFromFilesStructure: false

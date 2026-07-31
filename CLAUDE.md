@@ -58,6 +58,7 @@ flash-gateway → flash-common（排除 web/tomcat/mybatis/validation 等重量�
 11. 消费者隔离：@ConditionalOnProperty(name="flash.flash.consumer.enabled")，flash-api 启用、flash-admin 禁用，避免同消费组冲突
 12. 雪花 ID（SnowflakeIdGenerator）用于分布式订单 ID，JacksonConfig 注解驱动 Long→String 序列化解决 JS 精度丢失
 13. 配置文件按环境拆分：application.yml（通用）+ application-dev.yml（本地开发）+ application-prod.yml（生产环境变量）+ application-docker.yml（Docker Compose 容器名访问）
+14. 监控栈规范：自定义指标埋点在 Controller 层（用户视角），不在 Consumer 层；Timer 必须配 `.publishPercentileHistogram()` 暴露 P99；application.yml 必须配 `percentiles-histogram: true`；Grafana Dashboard 用新版扁平 `panels` 格式（不用旧 `rows`）；Prometheus 用 `host.docker.internal` 访问宿主机本地应用
 
 ## 生成要求
 1. 直接生成可运行的完整代码

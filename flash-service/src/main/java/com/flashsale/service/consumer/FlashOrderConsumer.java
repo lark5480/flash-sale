@@ -8,6 +8,7 @@ import com.flashsale.model.entity.FlashOrder;
 import com.flashsale.model.enums.OrderStatusEnum;
 import com.flashsale.service.FlashOrderService;
 import com.flashsale.service.message.FlashOrderMessage;
+import com.flashsale.service.metrics.FlashSaleMetrics;
 import org.apache.rocketmq.spring.annotation.RocketMQMessageListener;
 import org.apache.rocketmq.spring.core.RocketMQListener;
 import org.redisson.api.RLock;
@@ -35,7 +36,8 @@ import java.util.concurrent.TimeUnit;
 @RocketMQMessageListener(
         topic = RocketMQConstants.FLASH_ORDER_TOPIC,
         selectorExpression = RocketMQConstants.TAG_CREATE,
-        consumerGroup = RocketMQConstants.ORDER_CONSUMER_GROUP
+        consumerGroup = RocketMQConstants.ORDER_CONSUMER_GROUP,
+        maxReconsumeTimes = 3
 )
 public class FlashOrderConsumer implements RocketMQListener<FlashOrderMessage> {
 
@@ -45,15 +47,18 @@ public class FlashOrderConsumer implements RocketMQListener<FlashOrderMessage> {
     private final FlashOrderMapper flashOrderMapper;
     private final StringRedisTemplate stringRedisTemplate;
     private final RedissonClient redissonClient;
+    private final FlashSaleMetrics flashSaleMetrics;
 
     public FlashOrderConsumer(FlashOrderService flashOrderService,
                               FlashOrderMapper flashOrderMapper,
                               StringRedisTemplate stringRedisTemplate,
-                              RedissonClient redissonClient) {
+                              RedissonClient redissonClient,
+                              FlashSaleMetrics flashSaleMetrics) {
         this.flashOrderService = flashOrderService;
         this.flashOrderMapper = flashOrderMapper;
         this.stringRedisTemplate = stringRedisTemplate;
         this.redissonClient = redissonClient;
+        this.flashSaleMetrics = flashSaleMetrics;
     }
 
     /**
@@ -106,14 +111,17 @@ public class FlashOrderConsumer implements RocketMQListener<FlashOrderMessage> {
                     message.getFlashSaleId(), order);
 
             if (created != null) {
+                flashSaleMetrics.recordOrderSuccess();
                 log.info("[异步下单] 订单创建成功, orderId={}, messageKey={}",
                         created.getId(), msgKey);
             }
 
         } catch (BusinessException e) {
+            flashSaleMetrics.recordOrderFail();
             log.warn("[异步下单] 业务异常不重试, messageKey={}, flashSaleId={}: {}",
                     msgKey, message.getFlashSaleId(), e.getMessage());
         } catch (Exception e) {
+            flashSaleMetrics.recordOrderFail();
             log.error("[异步下单] 系统异常触发重试, messageKey={}, flashSaleId={}",
                     msgKey, message.getFlashSaleId(), e);
             throw e;

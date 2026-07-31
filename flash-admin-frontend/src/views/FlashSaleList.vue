@@ -2,13 +2,39 @@
   <div class="page-container">
     <div class="page-header">
       <h3>秒杀管理</h3>
-      <el-button type="primary" @click="openAddDialog">
-        <el-icon style="margin-right: 4px;"><Plus /></el-icon>
-        创建秒杀
-      </el-button>
+      <div class="header-actions">
+        <el-input
+          v-model="searchKey"
+          placeholder="搜索商品名称"
+          clearable
+          style="width: 200px"
+          @input="handleSearch"
+        />
+        <el-select
+          v-model="statusFilter"
+          placeholder="状态筛选"
+          clearable
+          style="width: 120px"
+          @change="handleSearch"
+        >
+          <el-option label="全部" :value="''" />
+          <el-option label="待开始" :value="0" />
+          <el-option label="进行中" :value="1" />
+          <el-option label="已结束" :value="2" />
+          <el-option label="已取消" :value="3" />
+        </el-select>
+        <el-button @click="handleRefresh">
+          <el-icon style="margin-right: 4px;"><Refresh /></el-icon>
+          刷新
+        </el-button>
+        <el-button type="primary" @click="openAddDialog">
+          <el-icon style="margin-right: 4px;"><Plus /></el-icon>
+          创建秒杀
+        </el-button>
+      </div>
     </div>
 
-    <el-table :data="sales" stripe border style="width: 100%" v-loading="loading">
+    <el-table :data="filteredSales" stripe border style="width: 100%" v-loading="loading">
       <el-table-column prop="id" label="ID" width="80" />
       <el-table-column prop="itemName" label="商品名称" min-width="140">
         <template #default="{ row }">
@@ -49,14 +75,8 @@
       </el-table-column>
     </el-table>
 
-    <div class="pagination-wrap" v-if="total > 0">
-      <el-pagination
-        v-model:current-page="page"
-        :page-size="size"
-        :total="total"
-        layout="prev, pager, next, total"
-        @current-change="fetchSales"
-      />
+    <div class="pagination-wrap" v-if="filteredSales.length > 0">
+      <span class="total-info">共 {{ filteredSales.length }} 条</span>
     </div>
 
     <el-dialog v-model="dialogVisible" :title="isEdit ? '编辑秒杀' : '创建秒杀'" width="550px">
@@ -101,8 +121,8 @@
 </template>
 
 <script setup>
-import { ref, onMounted } from 'vue'
-import { Plus } from '@element-plus/icons-vue'
+import { ref, computed, onMounted } from 'vue'
+import { Plus, Refresh } from '@element-plus/icons-vue'
 import { getFlashSales, createFlashSale, updateFlashSale, updateFlashSaleStatus } from '../api/flash-sale'
 import { getItems } from '../api/item'
 import { ElMessage, ElMessageBox } from 'element-plus'
@@ -114,6 +134,23 @@ const page = ref(1)
 const size = ref(10)
 const total = ref(0)
 const itemNameMap = ref({})
+const searchKey = ref('')
+const statusFilter = ref('')
+
+const filteredSales = computed(() => {
+  let result = sales.value
+  if (searchKey.value) {
+    const key = searchKey.value.toLowerCase()
+    result = result.filter(row => {
+      const name = itemNameMap.value[row.itemId] || ''
+      return name.toLowerCase().includes(key)
+    })
+  }
+  if (statusFilter.value !== '') {
+    result = result.filter(row => row.status === statusFilter.value)
+  }
+  return result
+})
 
 const dialogVisible = ref(false)
 const isEdit = ref(false)
@@ -160,14 +197,25 @@ const rules = {
 async function fetchSales() {
   loading.value = true
   try {
-    const res = await getFlashSales({ page: page.value, size: size.value })
+    const res = await getFlashSales({ page: 1, size: 200 })
     sales.value = res.data.records || []
     total.value = res.data.total || 0
+    page.value = 1
   } catch (e) {
     ElMessage.error('获取秒杀列表失败')
   } finally {
     loading.value = false
   }
+}
+
+function handleSearch() {
+  page.value = 1
+}
+
+function handleRefresh() {
+  searchKey.value = ''
+  statusFilter.value = ''
+  fetchSales()
 }
 
 function openAddDialog() {
@@ -274,9 +322,19 @@ onMounted(() => {
   letter-spacing: 0.5px;
   margin: 0;
 }
-.pagination-wrap {
+pagination-wrap {
   margin-top: 16px;
   display: flex;
   justify-content: flex-end;
+  align-items: center;
+}
+.total-info {
+  color: #9CA3AF;
+  font-size: 13px;
+}
+.header-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
 }
 </style>

@@ -26,11 +26,11 @@ public class CacheConfig {
                 .build();
     }
 
-    /** 秒杀活动列表缓存（首页热门）：TTL 15 秒，列表变更频率高 */
+    /** 秒杀活动列表缓存（首页热门）：TTL 120 秒，列表变更频率高 */
     @Bean
     public Cache<String, String> activeFlashSaleCache() {
         return Caffeine.newBuilder()
-                .expireAfterWrite(15, TimeUnit.SECONDS)
+                .expireAfterWrite(120, TimeUnit.SECONDS)
                 .maximumSize(10)
                 .recordStats()
                 .build();

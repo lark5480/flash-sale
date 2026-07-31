@@ -15,8 +15,11 @@
 | 缓存 | Redis 7 + Caffeine 3.1.8（L1）+ Redisson 3.24.3（分布式锁） |
 | 消息队列 | RocketMQ 5.3.0 (server) + rocketmq-spring-boot-starter 2.3.0 (client) |
 | 认证 | JWT (jjwt 0.12.3, 双 Token: accessToken + refreshToken) |
+| 监控 | Spring Boot Actuator + Micrometer + Prometheus + Grafana |
+| 熔断降级 | Sentinel 1.8.8（@SentinelResource 业务层限流/熔断） |
 | 前端 | Vue 3 + Vite + Element Plus (管理端) |
-| 部署 | Docker Compose（8 服务编排） |
+| 部署 | Docker Compose（14 服务编排） |
+| CI | GitHub Actions（Maven 构建 + Artifact 上传） |
 
 ## 项目结构
 
@@ -56,26 +59,48 @@ flash-sale
 - 用户列表 + 启用/禁用
 
 ### 安全防护
-- 接口限流（@RateLimit 注解 + Redis ZSET 滑动窗口）
+- 接口限流（@RateLimit 注解 + Redis ZSET 滑动窗口）—— **控制层限流**
   - 秒杀下单：5 次 / 5 秒
   - C 端登录：5 次 / 60 秒
   - 注册：3 次 / 60 秒
   - 管理端登录：3 次 / 60 秒
+- 熔断降级（@SentinelResource + Sentinel Dashboard）—— **业务层流控/熔断**
+  - 秒杀下单方法 `FlashOrderServiceImpl.purchase()` 标注 `@SentinelResource`
+  - blockHandler 返回"系统繁忙，请稍后重试"，fallback 兜底业务异常
+  - Sentinel Dashboard（:8718）动态推送流控/熔断/热点规则
 - 验证码（算术题 + Redis 存储，一次性消费）
 - JWT 密钥生产环境走环境变量 ${JWT_SECRET}
 - 异常分类处理（业务异常吞没，系统异常 re-throw 触发 MQ 重试）
+
+### 消息可靠性
+- RocketMQ Broker `flushDiskType = SYNC_FLUSH`（同步刷盘，消息不丢）
+- Consumer `maxReconsumeTimes = 3`（重试 3 次后进死信队列）
+- 死信队列消费者 `FlashOrderDeadLetterConsumer` 记录重试耗尽消息，供人工补偿
+- Broker 原生 Prometheus 指标导出（端口 5557）
+
+### 可观测性
+- **Actuator + Micrometer + Prometheus + Grafana** 全链路监控
+  - `/actuator/prometheus` 暴露 JVM / HTTP / 自定义业务指标
+  - 自定义业务指标：`flashsale.order.success` / `flashsale.order.fail` / `flashsale.order.duration`（含 SLO 分桶 50ms/100ms/500ms/1s/5s + 百分位直方图）
+  - Prometheus（:9090）拉取指标，Grafana（:3000，admin/admin）可视化大盘
+  - Dashboard 自动加载（Provisioning）：数据源 + 看板 JSON 版本控制，重启不丢失
+  - Dashboard：JVM 堆内存 / GC / CPU / HTTP QPS & P99 / 下单成功失败 & QPS & 成功率
+  - ⚠️ 关键配置：`management.metrics.distribution.percentiles-histogram.http.server.requests: true`（暴露 `_bucket` 指标，否则 P99 计算为 "No data"）
+  - ⚠️ 本地开发：Prometheus 用 `host.docker.internal` 访问宿主机上运行的应用（见 `docker/prometheus/prometheus.yml`）
 
 ### 自动化
 - 秒杀活动状态自动流转（定时任务：待开始 -> 进行中 -> 已结束）
 - 订单超时自动取消（15 分钟未支付，自动归还 DB + Redis 库存，递减用户购买计数）
 - Token 刷新
 - 启动时自动初始化默认管理员账号（admin / admin123）
+- GitHub Actions CI：push 到 master/dev 自动构建，产物上传 Artifact
 
 ### 缓存策略
-- **三级缓存**：L1 Caffeine（秒级 TTL）→ L2 Redis（分钟级 TTL）→ DB 兜底回源
+- **三级缓存**：L1 Caffeine（秒级 TTL）→ L2 Redis（分钟级 TTL）→ DB 兜底回源，活动列表同样走三级缓存
 - **写操作同时失效两级缓存**，读请求逐级回源并回填
+- **缓存三级防护**：穿透防护——空值标记（`@@NULL@@`）+ 短 TTL 兜底；雪崩防护——`randomTtl()` 基于 `ThreadLocalRandom` 叠加 ±300s 随机偏移；击穿防护——Caffeine `get(key, fn)` per-key 同步 + Redis `setIfAbsent`（SETNX）原子回填
 - **Redis 缓存预热**：秒杀激活时自动写入库存 + 详情缓存
-- **Redis Lua 原子扣库存**：单次 RTT 完成限购检查 + 库存扣减
+- **Redis SETNX 原子扣库存**：单次 RTT 完成限购检查 + 库存扣减
 
 ## 环境依赖
 
@@ -104,8 +129,9 @@ docker compose up -d
 docker compose exec -T mysql mysql -uroot -proot123 flash_sale < sql/init.sql
 ```
 
-> 前端产物构建一次即可，后续修改前端代码需要重新 `npm run build`。
+> 前端产品构建一次即可，后续修改前端代码需要重新 `npm run build`。
 > 若只需中间件（本地开发后端），运行：`docker compose up -d mysql redis nacos rocketmq-namesrv rocketmq-broker`
+> 启动监控栈：`docker compose up -d prometheus grafana node-exporter sentinel-dashboard`
 
 ### 方式二：本地手动启动
 
@@ -148,6 +174,9 @@ cd flash-admin-frontend && npm install && npm run dev
 | 网关（统一入口） | http://localhost:8080 |
 | 用户端前端 | http://localhost:5173 |
 | 管理端前端 | http://localhost:5174 |
+| Prometheus | http://localhost:9090 |
+| Grafana | http://localhost:3000（admin/admin） |
+| Sentinel Dashboard | http://localhost:8718 |
 
 默认管理员账号：`admin` / `admin123`
 
