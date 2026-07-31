@@ -2,9 +2,35 @@
   <div class="page-container">
     <div class="page-header">
       <h3>订单管理</h3>
+      <div class="header-actions">
+        <el-input
+          v-model="searchUserId"
+          placeholder="搜索用户ID"
+          clearable
+          style="width: 160px"
+          @input="handleSearch"
+        />
+        <el-select
+          v-model="statusFilter"
+          placeholder="状态筛选"
+          clearable
+          style="width: 120px"
+          @change="handleSearch"
+        >
+          <el-option label="全部" :value="''" />
+          <el-option label="待支付" :value="0" />
+          <el-option label="已支付" :value="1" />
+          <el-option label="已取消" :value="2" />
+          <el-option label="已退款" :value="3" />
+        </el-select>
+        <el-button @click="handleRefresh">
+          <el-icon style="margin-right: 4px;"><Refresh /></el-icon>
+          刷新
+        </el-button>
+      </div>
     </div>
 
-    <el-table :data="orders" stripe border style="width: 100%" v-loading="loading">
+    <el-table :data="filteredOrders" stripe border style="width: 100%" v-loading="loading">
       <el-table-column prop="id" label="订单ID" width="90" />
       <el-table-column prop="userId" label="用户ID" width="90" />
       <el-table-column prop="itemId" label="商品ID" width="90" />
@@ -54,20 +80,15 @@
       </el-table-column>
     </el-table>
 
-    <div class="pagination-wrap" v-if="total > 0">
-      <el-pagination
-        v-model:current-page="page"
-        :page-size="size"
-        :total="total"
-        layout="prev, pager, next, total"
-        @current-change="fetchOrders"
-      />
+    <div class="pagination-wrap" v-if="filteredOrders.length > 0">
+      <span class="total-info">共 {{ filteredOrders.length }} 条</span>
     </div>
   </div>
 </template>
 
 <script setup>
-import { ref, onMounted } from 'vue'
+import { ref, computed, onMounted } from 'vue'
+import { Refresh } from '@element-plus/icons-vue'
 import { getOrders, payOrder, refundOrder, deleteOrder } from '../api/order'
 import { ElMessage, ElMessageBox } from 'element-plus'
 
@@ -76,6 +97,19 @@ const loading = ref(false)
 const page = ref(1)
 const size = ref(10)
 const total = ref(0)
+const searchUserId = ref('')
+const statusFilter = ref('')
+
+const filteredOrders = computed(() => {
+  let result = orders.value
+  if (searchUserId.value) {
+    result = result.filter(order => String(order.userId) === searchUserId.value)
+  }
+  if (statusFilter.value !== '') {
+    result = result.filter(order => order.status === statusFilter.value)
+  }
+  return result
+})
 
 const statusMap = {
   0: { label: '待支付', type: 'info' },
@@ -100,14 +134,25 @@ function formatTime(t) {
 async function fetchOrders() {
   loading.value = true
   try {
-    const res = await getOrders({ page: page.value, size: size.value })
+    const res = await getOrders({ page: 1, size: 200 })
     orders.value = res.data.records || []
     total.value = res.data.total || 0
+    page.value = 1
   } catch (e) {
     ElMessage.error('获取订单列表失败')
   } finally {
     loading.value = false
   }
+}
+
+function handleSearch() {
+  page.value = 1
+}
+
+function handleRefresh() {
+  searchUserId.value = ''
+  statusFilter.value = ''
+  fetchOrders()
 }
 
 async function handlePay(row) {
@@ -194,5 +239,14 @@ onMounted(fetchOrders)
 .text-muted {
   color: #9CA3AF;
   font-size: 13px;
+}
+.total-info {
+  color: #9CA3AF;
+  font-size: 13px;
+}
+.header-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
 }
 </style>

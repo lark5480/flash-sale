@@ -6,17 +6,23 @@ scrape_configs:
   - job_name: 'flash-api'
     metrics_path: '/actuator/prometheus'
     static_configs:
-      # host.docker.internal 让容器内 Prometheus 访问宿主机上本地运行的应用
-      - targets: ['host.docker.internal:8081']
+      - targets: ['api:8081']
         labels:
           service: 'flash-api'
 
   - job_name: 'flash-admin'
     metrics_path: '/actuator/prometheus'
     static_configs:
-      - targets: ['host.docker.internal:8082']
+      - targets: ['admin:8082']
         labels:
           service: 'flash-admin'
+
+  - job_name: 'flash-gateway'
+    metrics_path: '/actuator/prometheus'
+    static_configs:
+      - targets: ['gateway:8080']
+        labels:
+          service: 'flash-gateway'
 
   - job_name: 'rocketmq-broker'
     static_configs:

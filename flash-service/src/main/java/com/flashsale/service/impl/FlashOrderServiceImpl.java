@@ -20,7 +20,6 @@ import com.flashsale.service.FlashOrderService;
 import com.flashsale.service.message.FlashOrderMessage;
 import com.flashsale.common.util.SnowflakeIdGenerator;
 import com.flashsale.service.producer.FlashOrderProducer;
-import com.flashsale.service.metrics.FlashSaleMetrics;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.data.redis.core.StringRedisTemplate;
@@ -51,22 +50,19 @@ public class FlashOrderServiceImpl implements FlashOrderService {
     private final DefaultRedisScript<Long> stockDeductScript;
     private final FlashOrderProducer flashOrderProducer;
     private final SnowflakeIdGenerator snowflakeIdGenerator;
-    private final FlashSaleMetrics flashSaleMetrics;
 
     public FlashOrderServiceImpl(FlashOrderMapper flashOrderMapper,
                                  FlashSaleMapper flashSaleMapper,
                                  StringRedisTemplate stringRedisTemplate,
                                  DefaultRedisScript<Long> stockDeductScript,
                                  FlashOrderProducer flashOrderProducer,
-                                 SnowflakeIdGenerator snowflakeIdGenerator,
-                                 FlashSaleMetrics flashSaleMetrics) {
+                                 SnowflakeIdGenerator snowflakeIdGenerator) {
         this.flashOrderMapper = flashOrderMapper;
         this.flashSaleMapper = flashSaleMapper;
         this.stringRedisTemplate = stringRedisTemplate;
         this.stockDeductScript = stockDeductScript;
         this.flashOrderProducer = flashOrderProducer;
         this.snowflakeIdGenerator = snowflakeIdGenerator;
-        this.flashSaleMetrics = flashSaleMetrics;
     }
 
     @Override
@@ -140,9 +136,7 @@ public class FlashOrderServiceImpl implements FlashOrderService {
             fallback = "purchaseFallback"
     )
     public FlashOrderVO purchase(Long flashSaleId, Long userId) {
-        io.micrometer.core.instrument.Timer.Sample timerSample = flashSaleMetrics.startTimer();
-        try {
-            // ========== 1. DB 基础校验 ==========
+        // ========== 1. DB 基础校验 ==========
             FlashSale flashSale = flashSaleMapper.selectById(flashSaleId);
             if (flashSale == null) {
                 throw new BusinessException(ResultCode.NOT_FOUND, "秒杀活动不存在");
@@ -208,13 +202,10 @@ public class FlashOrderServiceImpl implements FlashOrderService {
             // 返回 messageKey，客户端据此轮询订单状态
             vo.setMessageKey(messageKey);
             return vo;
-        } finally {
-            flashSaleMetrics.stopTimer(timerSample);
-        }
     }
 
     /**
-     * Sentinel 流控/熔断降级处理
+     * Sentinel 流控/降级处理
      * <p>
      * 当 purchase() 触发 Sentinel 流控规则或熔断规则时，执行此方法。
      */

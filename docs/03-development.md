@@ -683,8 +683,6 @@ management:
       # ★ 关键：暴露 histogram bucket，否则 P99 计算为 "No data"
       percentiles-histogram:
         http.server.requests: true
-      percentiles:
-        http.server.requests: [0.5, 0.95, 0.99]
 ```
 
 ### 10.3 自定义业务指标
@@ -695,7 +693,7 @@ management:
 |--------|------|------|
 | `flashsale.order.success` | Counter | 下单成功次数 |
 | `flashsale.order.fail` | Counter | 下单失败次数 |
-| `flashsale.order.duration` | Timer | 下单处理耗时（含 P50/P95/P99 分位） |
+| `flashsale.order.duration` | Timer | 下单处理耗时（含 SLO 分桶：50ms/100ms/500ms/1s/5s + 百分位直方图） |
 
 埋点在 `FlashOrderController.purchase()` 中调用（Controller 层）。
 
@@ -705,7 +703,7 @@ management:
 |------|------|------|
 | Grafana 面板 "No data" | Prometheus Targets DOWN / 指标不存在 | 检查 `http://localhost:9090/targets` |
 | P99 面板 "No data" | 缺少 `_bucket` 指标 | 配 `percentiles-histogram: true` |
-| Prometheus 拉不到本地应用 | 容器内 localhost 指向容器自身 | 用 `host.docker.internal` 访问宿主机 |
+| Prometheus 拉不到本地应用 | 容器内 localhost 指向容器自身 | Prometheus targets 使用容器名（api:8081, admin:8082），本地开发需手动改为 host.docker.internal |
 | Grafana "Failed to upgrade legacy queries" | Dashboard JSON 用旧 `rows` 格式 | 重写为扁平 `panels` 格式 |
 
 > 详细使用指南见 Obsidian 笔记：`Prometheus 从入门到排查.md`、`Grafana 看板配置实战.md`、`Sentinel Dashboard 使用指南.md`。

@@ -16,9 +16,9 @@
 | 消息队列 | RocketMQ 5.3.0 (server) + rocketmq-spring-boot-starter 2.3.0 (client) |
 | 认证 | JWT (jjwt 0.12.3, 双 Token: accessToken + refreshToken) |
 | 监控 | Spring Boot Actuator + Micrometer + Prometheus + Grafana |
-| 熔断降级 | Sentinel 1.8.6（@SentinelResource 业务层限流/熔断） |
+| 熔断降级 | Sentinel 1.8.8（@SentinelResource 业务层限流/熔断） |
 | 前端 | Vue 3 + Vite + Element Plus (管理端) |
-| 部署 | Docker Compose（13 服务编排） |
+| 部署 | Docker Compose（14 服务编排） |
 | CI | GitHub Actions（Maven 构建 + Artifact 上传） |
 
 ## 项目结构
@@ -81,7 +81,7 @@ flash-sale
 ### 可观测性
 - **Actuator + Micrometer + Prometheus + Grafana** 全链路监控
   - `/actuator/prometheus` 暴露 JVM / HTTP / 自定义业务指标
-  - 自定义业务指标：`flashsale.order.success` / `flashsale.order.fail` / `flashsale.order.duration`（含 P99 分位直方图）
+  - 自定义业务指标：`flashsale.order.success` / `flashsale.order.fail` / `flashsale.order.duration`（含 SLO 分桶 50ms/100ms/500ms/1s/5s + 百分位直方图）
   - Prometheus（:9090）拉取指标，Grafana（:3000，admin/admin）可视化大盘
   - Dashboard 自动加载（Provisioning）：数据源 + 看板 JSON 版本控制，重启不丢失
   - Dashboard：JVM 堆内存 / GC / CPU / HTTP QPS & P99 / 下单成功失败 & QPS & 成功率

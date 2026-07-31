@@ -1,10 +1,17 @@
-# Flash Sale - middleware + app containers
+# Flash Sale - 完整服务编排（14 个容器）
 #
-# Start middleware only (run backend/frontend locally): docker compose up -d mysql redis nacos rocketmq-namesrv rocketmq-broker
-# Full deployment: docker compose up -d
-# Logs: docker compose logs -f
-# Stop: docker compose down
-# Clean (remove volumes): docker compose down -v
+# 仅启动中间件（本地开发后端）:
+#   docker compose up -d mysql redis nacos rocketmq-namesrv rocketmq-broker
+#
+# 启动监控栈（Prometheus + Grafana + Node Exporter + Sentinel）:
+#   docker compose up -d prometheus grafana node-exporter sentinel-dashboard
+#
+# 全量部署（中间件 + 后端 + 前端 + 监控）:
+#   docker compose up -d
+#
+# 查看日志: docker compose logs -f
+# 停止: docker compose down
+# 清理（删除数据卷）: docker compose down -v
 
 services:
   # Infrastructure

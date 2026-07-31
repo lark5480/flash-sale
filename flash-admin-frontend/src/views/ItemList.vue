@@ -2,13 +2,37 @@
   <div class="page-container">
     <div class="page-header">
       <h3>商品管理</h3>
-      <el-button type="primary" @click="openAddDialog">
-        <el-icon style="margin-right: 4px;"><Plus /></el-icon>
-        新增商品
-      </el-button>
+      <div class="header-actions">
+        <el-input
+          v-model="searchKey"
+          placeholder="搜索商品名称"
+          clearable
+          style="width: 200px"
+          @input="handleSearch"
+        />
+        <el-select
+          v-model="statusFilter"
+          placeholder="状态筛选"
+          clearable
+          style="width: 120px"
+          @change="handleSearch"
+        >
+          <el-option label="全部" :value="''" />
+          <el-option label="上架" :value="1" />
+          <el-option label="下架" :value="0" />
+        </el-select>
+        <el-button @click="handleRefresh">
+          <el-icon style="margin-right: 4px;"><Refresh /></el-icon>
+          刷新
+        </el-button>
+        <el-button type="primary" @click="openAddDialog">
+          <el-icon style="margin-right: 4px;"><Plus /></el-icon>
+          新增商品
+        </el-button>
+      </div>
     </div>
 
-    <el-table :data="items" stripe border style="width: 100%" v-loading="loading">
+    <el-table :data="filteredItems" stripe border style="width: 100%" v-loading="loading">
       <el-table-column prop="id" label="ID" width="80" />
       <el-table-column prop="name" label="商品名称" min-width="150" />
       <el-table-column prop="price" label="价格" width="120">
@@ -31,14 +55,8 @@
       </el-table-column>
     </el-table>
 
-    <div class="pagination-wrap" v-if="total > 0">
-      <el-pagination
-        v-model:current-page="page"
-        :page-size="size"
-        :total="total"
-        layout="prev, pager, next, total"
-        @current-change="fetchItems"
-      />
+    <div class="pagination-wrap" v-if="filteredItems.length > 0">
+      <span class="total-info">共 {{ filteredItems.length }} 条</span>
     </div>
 
     <el-dialog v-model="dialogVisible" :title="isEdit ? '编辑商品' : '新增商品'" width="500px">
@@ -65,8 +83,8 @@
 </template>
 
 <script setup>
-import { ref, onMounted } from 'vue'
-import { Plus } from '@element-plus/icons-vue'
+import { ref, computed, onMounted } from 'vue'
+import { Plus, Refresh } from '@element-plus/icons-vue'
 import { getItems, createItem, updateItem, deleteItem } from '../api/item'
 import { ElMessage, ElMessageBox } from 'element-plus'
 
@@ -76,6 +94,20 @@ const submitting = ref(false)
 const page = ref(1)
 const size = ref(10)
 const total = ref(0)
+const searchKey = ref('')
+const statusFilter = ref('')
+
+const filteredItems = computed(() => {
+  let result = items.value
+  if (searchKey.value) {
+    const key = searchKey.value.toLowerCase()
+    result = result.filter(item => item.name?.toLowerCase().includes(key))
+  }
+  if (statusFilter.value !== '') {
+    result = result.filter(item => item.status === statusFilter.value)
+  }
+  return result
+})
 
 const dialogVisible = ref(false)
 const isEdit = ref(false)
@@ -96,14 +128,25 @@ const rules = {
 async function fetchItems() {
   loading.value = true
   try {
-    const res = await getItems({ page: page.value, size: size.value })
+    const res = await getItems({ page: 1, size: 200 })
     items.value = res.data.records || []
     total.value = res.data.total || 0
+    page.value = 1
   } catch (e) {
     ElMessage.error('获取商品列表失败')
   } finally {
     loading.value = false
   }
+}
+
+function handleSearch() {
+  page.value = 1
+}
+
+function handleRefresh() {
+  searchKey.value = ''
+  statusFilter.value = ''
+  fetchItems()
 }
 
 function openAddDialog() {
@@ -192,5 +235,15 @@ onMounted(fetchItems)
   margin-top: 16px;
   display: flex;
   justify-content: flex-end;
+  align-items: center;
+}
+.total-info {
+  color: #9CA3AF;
+  font-size: 13px;
+}
+.header-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
 }
 </style>

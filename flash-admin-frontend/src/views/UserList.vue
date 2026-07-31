@@ -2,9 +2,33 @@
   <div class="page-container">
     <div class="page-header">
       <h3>用户管理</h3>
+      <div class="header-actions">
+        <el-input
+          v-model="searchKey"
+          placeholder="搜索用户名"
+          clearable
+          style="width: 200px"
+          @input="handleSearch"
+        />
+        <el-select
+          v-model="statusFilter"
+          placeholder="状态筛选"
+          clearable
+          style="width: 120px"
+          @change="handleSearch"
+        >
+          <el-option label="全部" :value="''" />
+          <el-option label="正常" :value="1" />
+          <el-option label="已禁用" :value="0" />
+        </el-select>
+        <el-button @click="handleRefresh">
+          <el-icon style="margin-right: 4px;"><Refresh /></el-icon>
+          刷新
+        </el-button>
+      </div>
     </div>
 
-    <el-table :data="users" stripe border style="width: 100%" v-loading="loading">
+    <el-table :data="filteredUsers" stripe border style="width: 100%" v-loading="loading">
       <el-table-column prop="id" label="ID" width="80" />
       <el-table-column prop="username" label="用户名" min-width="130" />
       <el-table-column prop="phone" label="手机号" width="140" />
@@ -31,20 +55,15 @@
       </el-table-column>
     </el-table>
 
-    <div class="pagination-wrap" v-if="total > 0">
-      <el-pagination
-        v-model:current-page="page"
-        :page-size="size"
-        :total="total"
-        layout="prev, pager, next, total"
-        @current-change="fetchUsers"
-      />
+    <div class="pagination-wrap" v-if="filteredUsers.length > 0">
+      <span class="total-info">共 {{ filteredUsers.length }} 条</span>
     </div>
   </div>
 </template>
 
 <script setup>
-import { ref, onMounted } from 'vue'
+import { ref, computed, onMounted } from 'vue'
+import { Refresh } from '@element-plus/icons-vue'
 import { getUsers, updateUserStatus } from '../api/user'
 import { ElMessage, ElMessageBox } from 'element-plus'
 
@@ -53,19 +72,44 @@ const loading = ref(false)
 const page = ref(1)
 const size = ref(10)
 const total = ref(0)
+const searchKey = ref('')
+const statusFilter = ref('')
+
+const filteredUsers = computed(() => {
+  let result = users.value
+  if (searchKey.value) {
+    const key = searchKey.value.toLowerCase()
+    result = result.filter(user => user.username?.toLowerCase().includes(key))
+  }
+  if (statusFilter.value !== '') {
+    result = result.filter(user => user.status === statusFilter.value)
+  }
+  return result
+})
 
 async function fetchUsers() {
   loading.value = true
   try {
-    const res = await getUsers({ page: page.value, size: size.value })
+    const res = await getUsers({ page: 1, size: 200 })
     const data = res.data || {}
     users.value = data.records || []
     total.value = data.total || 0
+    page.value = 1
   } catch (e) {
     ElMessage.error('获取用户列表失败')
   } finally {
     loading.value = false
   }
+}
+
+function handleSearch() {
+  page.value = 1
+}
+
+function handleRefresh() {
+  searchKey.value = ''
+  statusFilter.value = ''
+  fetchUsers()
 }
 
 async function handleToggleStatus(row) {
@@ -112,9 +156,19 @@ onMounted(fetchUsers)
   letter-spacing: 0.5px;
   margin: 0;
 }
-.pagination-wrap {
+pagination-wrap {
   margin-top: 16px;
   display: flex;
   justify-content: flex-end;
+  align-items: center;
+}
+.total-info {
+  color: #9CA3AF;
+  font-size: 13px;
+}
+.header-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
 }
 </style>

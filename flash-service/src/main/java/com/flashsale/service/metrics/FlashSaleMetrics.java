@@ -3,6 +3,7 @@ package com.flashsale.service.metrics;
 import io.micrometer.core.instrument.Counter;
 import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.core.instrument.Timer;
+import java.time.Duration;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
@@ -33,7 +34,7 @@ public class FlashSaleMetrics {
                 .description("下单处理耗时")
                 // 暴露 histogram bucket，支持 histogram_quantile 计算 P99
                 .publishPercentileHistogram()
-                .publishPercentiles(0.5, 0.95, 0.99)
+                .serviceLevelObjectives(Duration.ofMillis(50), Duration.ofMillis(100), Duration.ofMillis(500), Duration.ofSeconds(1), Duration.ofSeconds(5))
                 .register(registry);
     }
 

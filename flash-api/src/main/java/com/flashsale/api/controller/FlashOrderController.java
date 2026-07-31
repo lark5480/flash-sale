@@ -59,7 +59,6 @@ public class FlashOrderController {
         Timer.Sample timerSample = flashSaleMetrics.startTimer();
         try {
             FlashOrderVO vo = flashOrderService.purchase(flashSaleId, userId);
-            flashSaleMetrics.recordOrderSuccess();
             // Phase 3: 返回 messageKey 让客户端轮询订单状态
             return ResultVO.success(Map.of(
                     "status", "PROCESSING",
@@ -67,9 +66,6 @@ public class FlashOrderController {
                     "flashSaleId", flashSaleId,
                     "userId", userId
             ));
-        } catch (Exception e) {
-            flashSaleMetrics.recordOrderFail();
-            throw e;
         } finally {
             flashSaleMetrics.stopTimer(timerSample);
         }
