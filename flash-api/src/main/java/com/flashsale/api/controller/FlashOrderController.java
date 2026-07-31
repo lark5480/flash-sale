@@ -8,6 +8,8 @@ import com.flashsale.model.entity.FlashOrder;
 import com.flashsale.model.vo.FlashOrderVO;
 import com.flashsale.service.CaptchaService;
 import com.flashsale.service.FlashOrderService;
+import com.flashsale.service.metrics.FlashSaleMetrics;
+import io.micrometer.core.instrument.Timer;
 import org.springframework.security.core.Authentication;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -28,10 +30,14 @@ public class FlashOrderController {
 
     private final FlashOrderService flashOrderService;
     private final CaptchaService captchaService;
+    private final FlashSaleMetrics flashSaleMetrics;
 
-    public FlashOrderController(FlashOrderService flashOrderService, CaptchaService captchaService) {
+    public FlashOrderController(FlashOrderService flashOrderService,
+                                CaptchaService captchaService,
+                                FlashSaleMetrics flashSaleMetrics) {
         this.flashOrderService = flashOrderService;
         this.captchaService = captchaService;
+        this.flashSaleMetrics = flashSaleMetrics;
     }
 
     /**
@@ -50,14 +56,23 @@ public class FlashOrderController {
             return ResultVO.fail(ResultCode.CAPTCHA_ERROR, "验证码错误或已过期");
         }
         Long userId = (Long) auth.getPrincipal();
-        FlashOrderVO vo = flashOrderService.purchase(flashSaleId, userId);
-        // Phase 3: 返回 messageKey 让客户端轮询订单状态
-        return ResultVO.success(Map.of(
-                "status", "PROCESSING",
-                "messageKey", vo.getMessageKey() != null ? vo.getMessageKey() : "",
-                "flashSaleId", flashSaleId,
-                "userId", userId
-        ));
+        Timer.Sample timerSample = flashSaleMetrics.startTimer();
+        try {
+            FlashOrderVO vo = flashOrderService.purchase(flashSaleId, userId);
+            flashSaleMetrics.recordOrderSuccess();
+            // Phase 3: 返回 messageKey 让客户端轮询订单状态
+            return ResultVO.success(Map.of(
+                    "status", "PROCESSING",
+                    "messageKey", vo.getMessageKey() != null ? vo.getMessageKey() : "",
+                    "flashSaleId", flashSaleId,
+                    "userId", userId
+            ));
+        } catch (Exception e) {
+            flashSaleMetrics.recordOrderFail();
+            throw e;
+        } finally {
+            flashSaleMetrics.stopTimer(timerSample);
+        }
     }
 
     /**

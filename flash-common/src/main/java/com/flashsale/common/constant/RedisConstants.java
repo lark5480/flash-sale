@@ -32,6 +32,11 @@ public final class RedisConstants {
     /** 商品缓存 Key 前缀，格式：item:{itemId} */
     public static final String ITEM_CACHE_KEY = "item:";
 
+    // ==================== Pub/Sub 频道 ====================
+
+    /** Redis Pub/Sub 缓存失效频道 */
+    public static final String CACHE_INVALIDATE_CHANNEL = "cache:invalidate";
+
     // ==================== 过期时间（秒） ====================
 
     /** 秒杀缓存默认 TTL：秒杀活动结束后 1 小时过期 */

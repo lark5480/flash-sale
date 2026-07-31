@@ -5,6 +5,11 @@ spring:
     nacos:
       discovery:
         server-addr: ${NACOS_SERVER_ADDR:127.0.0.1:8848}
+    sentinel:
+      transport:
+        dashboard: localhost:8718
+      eager: true
+      port: 8719
         namespace: ${NACOS_NAMESPACE}
         username: ${NACOS_USERNAME}
         password: ${NACOS_PASSWORD}
@@ -43,3 +48,15 @@ flash:
   flash:
     consumer:
       enabled: true
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,prometheus,metrics,env,beans
+  endpoint:
+    health:
+      show-details: always
+  metrics:
+    tags:
+      application: ${spring.application.name}

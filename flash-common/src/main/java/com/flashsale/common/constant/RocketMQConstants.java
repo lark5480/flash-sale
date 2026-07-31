@@ -30,4 +30,12 @@ public final class RocketMQConstants {
 
     /** 幂等记录过期时间（秒） */
     public static final long MSG_PROCESSED_TTL = 3600L;
+
+    // ==================== 死信队列 ====================
+
+    /** 死信队列主题（RocketMQ 自动路由格式：%DLQ%<consumerGroup>） */
+    public static final String FLASH_ORDER_DLT_TOPIC = "%DLQ%" + ORDER_CONSUMER_GROUP;
+
+    /** 死信队列消费者组 */
+    public static final String FLASH_ORDER_DLT_CONSUMER_GROUP = "flash-order-dlt-consumer-group";
 }

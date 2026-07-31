@@ -1,0 +1,29 @@
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+scrape_configs:
+  - job_name: 'flash-api'
+    metrics_path: '/actuator/prometheus'
+    static_configs:
+      # host.docker.internal 让容器内 Prometheus 访问宿主机上本地运行的应用
+      - targets: ['host.docker.internal:8081']
+        labels:
+          service: 'flash-api'
+
+  - job_name: 'flash-admin'
+    metrics_path: '/actuator/prometheus'
+    static_configs:
+      - targets: ['host.docker.internal:8082']
+        labels:
+          service: 'flash-admin'
+
+  - job_name: 'rocketmq-broker'
+    static_configs:
+      - targets: ['flash-rocketmq-broker:5557']
+        labels:
+          service: 'rocketmq-broker'
+
+  - job_name: 'node-exporter'
+    static_configs:
+      - targets: ['flash-node-exporter:9100']

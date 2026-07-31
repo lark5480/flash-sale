@@ -85,7 +85,22 @@ docker exec flash-redis redis-cli ping
 
 > **注意**：命名空间 ID 是在创建时指定的，之后无法修改。如果创建时未填写 ID，Nacos 会自动生成随机 ID，此时必须删除后重新创建。该 ID 与 `application-dev.yml` 中的 `spring.cloud.nacos.discovery.namespace` 配置一致。
 
-### 2.4 中间件管理命令
+### 2.4 启动监控栈
+
+```bash
+# 启动 Prometheus + Grafana + Node Exporter + Sentinel Dashboard
+docker compose up -d prometheus grafana node-exporter sentinel-dashboard
+```
+
+| 服务 | 地址 | 账号/密码 |
+|------|------|-----------|
+| Prometheus | http://localhost:9090 | 无 |
+| Grafana | http://localhost:3000 | admin / admin |
+| Sentinel Dashboard | http://localhost:8718 | sentinel / sentinel |
+
+> **说明**：Grafana 首次登录后数据源和看板会自动加载（Provisioning），无需手动配置。
+
+### 2.5 中间件管理命令
 
 ```bash
 # 停止所有中间件（保留数据卷）
@@ -232,6 +247,9 @@ npm run dev
 | 用户端前端 | http://localhost:5173 | 用户秒杀页面 |
 | 管理端前端 | http://localhost:5174 | 后台管理页面 |
 | Nacos 控制台 | http://localhost:8848/nacos | 账号密码：`nacos/nacos` |
+| Prometheus | http://localhost:9090 | 指标查询与告警 |
+| Grafana | http://localhost:3000 | 监控大盘（admin/admin） |
+| Sentinel Dashboard | http://localhost:8718 | 流控/熔断规则（sentinel/sentinel） |
 
 ---
 
@@ -338,3 +356,6 @@ npm install --registry=https://registry.npmmirror.com
 - [ ] flash-gateway（8080）启动成功，日志无报错
 - [ ] 用户端前端（5173）可正常访问
 - [ ] 管理端前端（5174）可正常访问，使用 `admin/admin123` 登录
+- [ ] Prometheus（9090）可访问，Targets 页面 flash-api/flash-admin 为 UP
+- [ ] Grafana（3000）可访问，Dashboard 自动加载
+- [ ] Sentinel Dashboard（8718）可访问，能看到 flash-api 应用

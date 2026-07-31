@@ -11,8 +11,11 @@ import com.flashsale.common.result.ResultCode;
 import com.flashsale.mapper.ItemMapper;
 import com.flashsale.model.entity.Item;
 import com.flashsale.service.ItemService;
+import com.flashsale.service.config.CacheInvalidatePublisher;
+import com.flashsale.service.message.CacheInvalidateMessage;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.stereotype.Service;
 
@@ -37,15 +40,18 @@ public class ItemServiceImpl implements ItemService {
     private final StringRedisTemplate stringRedisTemplate;
     private final ObjectMapper objectMapper;
     private final Cache<String, String> itemCache;
+    private final CacheInvalidatePublisher cacheInvalidatePublisher;
 
     public ItemServiceImpl(ItemMapper itemMapper,
                            StringRedisTemplate stringRedisTemplate,
                            ObjectMapper objectMapper,
-                           Cache<String, String> itemCache) {
+                           @Qualifier("itemCache") Cache<String, String> itemCache,
+                           CacheInvalidatePublisher cacheInvalidatePublisher) {
         this.itemMapper = itemMapper;
         this.stringRedisTemplate = stringRedisTemplate;
         this.objectMapper = objectMapper;
         this.itemCache = itemCache;
+        this.cacheInvalidatePublisher = cacheInvalidatePublisher;
     }
 
     @Override
@@ -143,5 +149,8 @@ public class ItemServiceImpl implements ItemService {
         String key = "item:" + itemId;
         itemCache.invalidate(key);
         stringRedisTemplate.delete(RedisConstants.ITEM_CACHE_KEY + itemId);
+
+        // 广播缓存失效，通知其他节点 invalidate 各自的 Caffeine
+        cacheInvalidatePublisher.publish(CacheInvalidateMessage.CACHE_ITEM, key);
     }
 }

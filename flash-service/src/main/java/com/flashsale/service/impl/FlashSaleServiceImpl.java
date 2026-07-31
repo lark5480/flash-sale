@@ -24,7 +24,10 @@ import com.flashsale.model.entity.Item;
 import com.flashsale.model.enums.FlashSaleStatusEnum;
 import com.flashsale.model.vo.FlashSaleVO;
 import com.flashsale.service.FlashSaleService;
+import com.flashsale.service.config.CacheInvalidatePublisher;
+import com.flashsale.service.message.CacheInvalidateMessage;
 import com.github.benmanes.caffeine.cache.Cache;
+import org.springframework.beans.factory.annotation.Qualifier;
 
 /**
  * 秒杀活动 Service 实现
@@ -48,19 +51,22 @@ public class FlashSaleServiceImpl implements FlashSaleService {
     private final ObjectMapper objectMapper;
     private final Cache<String, String> flashSaleDetailCache;
     private final Cache<String, String> activeFlashSaleCache;
+    private final CacheInvalidatePublisher cacheInvalidatePublisher;
 
     public FlashSaleServiceImpl(FlashSaleMapper flashSaleMapper,
                                 ItemMapper itemMapper,
                                 StringRedisTemplate stringRedisTemplate,
                                 ObjectMapper objectMapper,
-                                Cache<String, String> flashSaleDetailCache,
-                                Cache<String, String> activeFlashSaleCache) {
+                                @Qualifier("flashSaleDetailCache") Cache<String, String> flashSaleDetailCache,
+                                @Qualifier("activeFlashSaleCache") Cache<String, String> activeFlashSaleCache,
+                                CacheInvalidatePublisher cacheInvalidatePublisher) {
         this.flashSaleMapper = flashSaleMapper;
         this.itemMapper = itemMapper;
         this.stringRedisTemplate = stringRedisTemplate;
         this.objectMapper = objectMapper;
         this.flashSaleDetailCache = flashSaleDetailCache;
         this.activeFlashSaleCache = activeFlashSaleCache;
+        this.cacheInvalidatePublisher = cacheInvalidatePublisher;
     }
 
     @Override
@@ -291,6 +297,10 @@ public class FlashSaleServiceImpl implements FlashSaleService {
         stringRedisTemplate.delete(RedisConstants.FLASH_SALE_KEY + saleId);
         stringRedisTemplate.delete(RedisConstants.FLASH_STOCK_KEY + saleId);
         stringRedisTemplate.delete(RedisConstants.ACTIVE_FLASH_SALE_LIST_KEY);
+
+        // 广播缓存失效，通知其他节点 invalidate 各自的 Caffeine
+        cacheInvalidatePublisher.publish(CacheInvalidateMessage.CACHE_FLASH_SALE_DETAIL, caffeineKey);
+        cacheInvalidatePublisher.publish(CacheInvalidateMessage.CACHE_ACTIVE_FLASH_SALE, CacheInvalidateMessage.KEY_ALL);
     }
 
     private FlashSaleVO buildFlashSaleVO(FlashSale flashSale) {

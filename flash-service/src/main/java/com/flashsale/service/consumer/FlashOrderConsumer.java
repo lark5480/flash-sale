@@ -35,7 +35,8 @@ import java.util.concurrent.TimeUnit;
 @RocketMQMessageListener(
         topic = RocketMQConstants.FLASH_ORDER_TOPIC,
         selectorExpression = RocketMQConstants.TAG_CREATE,
-        consumerGroup = RocketMQConstants.ORDER_CONSUMER_GROUP
+        consumerGroup = RocketMQConstants.ORDER_CONSUMER_GROUP,
+        maxReconsumeTimes = 3
 )
 public class FlashOrderConsumer implements RocketMQListener<FlashOrderMessage> {
 

@@ -152,8 +152,55 @@ services:
     volumes:
       - ./flash-admin-frontend/dist:/usr/share/nginx/html:ro
 
+  # ---- Monitoring & Observability ----
+  prometheus:
+    image: prom/prometheus:v2.53.0
+    container_name: flash-prometheus
+    restart: unless-stopped
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./docker/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.retention.time=15d'
+
+  grafana:
+    image: grafana/grafana-oss:11.1.0
+    container_name: flash-grafana
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    environment:
+      - GF_SECURITY_ADMIN_PASSWORD=admin
+      - GF_USERS_ALLOW_SIGN_UP=false
+    volumes:
+      - flash-grafana-data:/var/lib/grafana
+      - ./docker/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./docker/grafana/dashboards:/etc/grafana/dashboards:ro
+    depends_on:
+      - prometheus
+
+  node-exporter:
+    image: prom/node-exporter:v1.8.1
+    container_name: flash-node-exporter
+    restart: unless-stopped
+    ports:
+      - "9100:9100"
+
+  # ---- Sentinel Dashboard ----
+  sentinel-dashboard:
+    image: bladex/sentinel-dashboard:1.8.8
+    container_name: flash-sentinel-dashboard
+    restart: unless-stopped
+    ports:
+      - "8718:8858"
+    environment:
+      JAVA_OPTS: -Xms128m -Xmx128m
+
 volumes:
   flash-mysql-data:
   flash-redis-data:
   flash-rocketmq-logs:
   flash-rocketmq-store:
+  flash-grafana-data:

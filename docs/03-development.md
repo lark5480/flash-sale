@@ -654,4 +654,63 @@ ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
 
 ---
 
+## 10. 监控与可观测性
+
+### 10.1 监控链路
+
+```
+应用暴露 /actuator/prometheus 端点
+  ↓ 每 15s 拉取
+Prometheus (:9090) → 存储时序数据
+  ↓ 查询
+Grafana (:3000) → 可视化大盘
+```
+
+### 10.2 关键配置
+
+**application.yml（flash-api / flash-admin 通用）**：
+
+```yaml
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,prometheus,metrics,env,beans
+  metrics:
+    tags:
+      application: ${spring.application.name}
+    distribution:
+      # ★ 关键：暴露 histogram bucket，否则 P99 计算为 "No data"
+      percentiles-histogram:
+        http.server.requests: true
+      percentiles:
+        http.server.requests: [0.5, 0.95, 0.99]
+```
+
+### 10.3 自定义业务指标
+
+`FlashSaleMetrics`（`flash-service/src/main/java/com/flashsale/service/metrics/FlashSaleMetrics.java`）：
+
+| 指标名 | 类型 | 说明 |
+|--------|------|------|
+| `flashsale.order.success` | Counter | 下单成功次数 |
+| `flashsale.order.fail` | Counter | 下单失败次数 |
+| `flashsale.order.duration` | Timer | 下单处理耗时（含 P50/P95/P99 分位） |
+
+埋点在 `FlashOrderController.purchase()` 中调用（Controller 层）。
+
+### 10.4 常见坑
+
+| 现象 | 原因 | 解决 |
+|------|------|------|
+| Grafana 面板 "No data" | Prometheus Targets DOWN / 指标不存在 | 检查 `http://localhost:9090/targets` |
+| P99 面板 "No data" | 缺少 `_bucket` 指标 | 配 `percentiles-histogram: true` |
+| Prometheus 拉不到本地应用 | 容器内 localhost 指向容器自身 | 用 `host.docker.internal` 访问宿主机 |
+| Grafana "Failed to upgrade legacy queries" | Dashboard JSON 用旧 `rows` 格式 | 重写为扁平 `panels` 格式 |
+
+> 详细使用指南见 Obsidian 笔记：`Prometheus 从入门到排查.md`、`Grafana 看板配置实战.md`、`Sentinel Dashboard 使用指南.md`。
+> 架构总览见 [01-架构文档](./01-architecture.md) 第 10 节。
+
+---
+
 > **快速启动**：环境搭建、中间件部署、服务启动请参考 [02-部署指南](./02-deployment.md)。默认管理员账号 `admin / admin123`，由 `DataInitRunner` 在首次启动时自动创建。
