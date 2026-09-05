@@ -12,7 +12,7 @@
         router
         class="nav-menu"
       >
-        <el-menu-item index="/">
+        <el-menu-item index="/dashboard">
           <el-icon><Monitor /></el-icon>
           <span>控制台</span>
         </el-menu-item>
@@ -45,79 +45,25 @@
       </header>
 
       <main class="content">
-        <router-view v-if="hasChildRoute" />
-        <div v-else class="welcome-page">
-          <div class="welcome-header">
-            <h2>管理控制台</h2>
-            <p>管理您的秒杀平台。</p>
-          </div>
-
-          <div class="stats-grid">
-            <div class="stat-card">
-              <div class="stat-icon" style="background: rgba(96,165,250,0.1); color: #60A5FA;">
-                <el-icon :size="24"><Goods /></el-icon>
-              </div>
-              <div class="stat-info">
-                <span class="stat-label">商品</span>
-                <span class="stat-value">{{ stats.items }}</span>
-              </div>
-            </div>
-            <div class="stat-card">
-              <div class="stat-icon" style="background: rgba(45,106,79,0.15); color: #4ADE80;">
-                <el-icon :size="24"><Timer /></el-icon>
-              </div>
-              <div class="stat-info">
-                <span class="stat-label">进行中秒杀</span>
-                <span class="stat-value">{{ stats.activeSales }}</span>
-              </div>
-            </div>
-            <div class="stat-card">
-              <div class="stat-icon" style="background: rgba(245,158,11,0.1); color: #F59E0B;">
-                <el-icon :size="24"><Document /></el-icon>
-              </div>
-              <div class="stat-info">
-                <span class="stat-label">订单</span>
-                <span class="stat-value">{{ stats.orders }}</span>
-              </div>
-            </div>
-            <div class="stat-card">
-              <div class="stat-icon" style="background: rgba(139,92,246,0.1); color: #A78BFA;">
-                <el-icon :size="24"><User /></el-icon>
-              </div>
-              <div class="stat-info">
-                <span class="stat-label">用户</span>
-                <span class="stat-value">{{ stats.users }}</span>
-              </div>
-            </div>
-          </div>
-        </div>
+        <router-view />
       </main>
     </div>
   </div>
 </template>
 
 <script setup>
-import { ref, computed, onMounted } from 'vue'
+import { computed } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import { Monitor, Goods, Timer, Document, User } from '@element-plus/icons-vue'
-import { getItems } from '../api/item'
-import { getFlashSales } from '../api/flash-sale'
-import { getOrders } from '../api/order'
-import { getUsers } from '../api/user'
 
 const router = useRouter()
 const route = useRoute()
 
-const hasChildRoute = computed(() => route.path !== '/')
-
-const activeMenu = computed(() => {
-  if (route.path === '/') return '/'
-  return route.path
-})
+const activeMenu = computed(() => route.path)
 
 const pageTitle = computed(() => {
   const titles = {
-    '/': '控制台',
+    '/dashboard': '控制台',
     '/items': '商品管理',
     '/flash-sales': '秒杀管理',
     '/orders': '订单管理',
@@ -125,32 +71,6 @@ const pageTitle = computed(() => {
   }
   return titles[route.path] || '控制台'
 })
-
-const stats = ref({
-  items: 0,
-  activeSales: 0,
-  orders: 0,
-  users: 0
-})
-
-async function fetchStats() {
-  try {
-    const [itemsRes, salesRes, ordersRes, usersRes] = await Promise.all([
-      getItems({ page: 1, size: 1 }),
-      getFlashSales({ page: 1, size: 1, status: 1 }),
-      getOrders({ page: 1, size: 1 }),
-      getUsers({ page: 1, size: 1 })
-    ])
-    stats.value.items = itemsRes.data.total || 0
-    stats.value.activeSales = salesRes.data.total || 0
-    stats.value.orders = ordersRes.data.total || 0
-    stats.value.users = usersRes.data.total || 0
-  } catch (e) {
-    // silently fail
-  }
-}
-
-onMounted(fetchStats)
 
 function handleLogout() {
   localStorage.removeItem('adminToken')
@@ -247,86 +167,5 @@ function handleLogout() {
   flex: 1;
   background: var(--color-bg);
   overflow-y: auto;
-}
-.welcome-page {
-  max-width: 960px;
-}
-
-/* ===== Welcome Header ===== */
-.welcome-header {
-  margin-bottom: 32px;
-}
-.welcome-header h2 {
-  font-family: var(--font-heading);
-  font-size: 28px;
-  color: #fff;
-  margin-bottom: 6px;
-  font-weight: 600;
-  letter-spacing: 0.5px;
-}
-.welcome-header p {
-  font-size: 14px;
-  color: var(--color-text-muted);
-}
-
-/* ===== Stats Grid ===== */
-.stats-grid {
-  display: grid;
-  grid-template-columns: repeat(4, 1fr);
-  gap: 16px;
-}
-@media (max-width: 1024px) {
-  .stats-grid {
-    grid-template-columns: repeat(2, 1fr);
-  }
-}
-@media (max-width: 640px) {
-  .stats-grid {
-    grid-template-columns: 1fr;
-  }
-}
-
-/* ===== Stat Card ===== */
-.stat-card {
-  background: var(--glass-bg);
-  backdrop-filter: blur(16px);
-  -webkit-backdrop-filter: blur(16px);
-  border: 1px solid var(--glass-border);
-  border-radius: var(--radius-lg);
-  padding: 24px;
-  display: flex;
-  align-items: center;
-  gap: 16px;
-  transition: all var(--transition-normal);
-  cursor: default;
-}
-.stat-card:hover {
-  border-color: rgba(255,255,255,0.1);
-  box-shadow: var(--shadow-md);
-  transform: translateY(-2px);
-}
-.stat-icon {
-  width: 52px;
-  height: 52px;
-  border-radius: var(--radius-md);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  flex-shrink: 0;
-}
-.stat-info { display: flex; flex-direction: column; }
-.stat-label {
-  font-size: 11px;
-  color: var(--color-text-muted);
-  margin-bottom: 2px;
-  font-weight: 500;
-  text-transform: uppercase;
-  letter-spacing: 0.8px;
-}
-.stat-value {
-  font-family: var(--font-mono);
-  font-size: 28px;
-  font-weight: 600;
-  color: #fff;
 }
 </style>
