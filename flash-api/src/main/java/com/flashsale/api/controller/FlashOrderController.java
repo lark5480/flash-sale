@@ -28,6 +28,9 @@ import java.util.Map;
 @RequestMapping("/api")
 public class FlashOrderController {
 
+    /** 单页最大条数，防止 size 被恶意放大 */
+    private static final long MAX_PAGE_SIZE = 100L;
+
     private final FlashOrderService flashOrderService;
     private final CaptchaService captchaService;
     private final FlashSaleMetrics flashSaleMetrics;
@@ -77,7 +80,7 @@ public class FlashOrderController {
      * 客户端用 purchase 返回的 messageKey 轮询此接口
      *
      * @param messageKey MQ 消息幂等键
-     * @return "PROCESSING" 或 "DONE"
+     * @return "PROCESSING" 处理中、"DONE" 订单已创建、"FAILED" 业务终态失败
      */
     @GetMapping("/order/status")
     public ResultVO<Map<String, String>> orderStatus(@RequestParam String messageKey) {
@@ -85,17 +88,29 @@ public class FlashOrderController {
         return ResultVO.success(Map.of("status", status, "messageKey", messageKey));
     }
 
+    /**
+     * 我的订单（分页 + 状态筛选 + 关键词搜索）
+     *
+     * @param page    页码，从 1 开始
+     * @param size    每页条数，限制在 1~100，防止大分页拖垮数据库
+     * @param status  订单状态（0待支付/1已支付/2已取消/3已退款），为空表示全部
+     * @param keyword 关键词，匹配订单号或商品名称
+     */
     @GetMapping("/order/list")
-    public ResultVO<IPage<FlashOrder>> listUserOrders(@RequestParam(defaultValue = "1") long page,
-                                                       @RequestParam(defaultValue = "10") long size,
-                                                       Authentication auth) {
+    public ResultVO<IPage<FlashOrderVO>> listUserOrders(@RequestParam(defaultValue = "1") long page,
+                                                        @RequestParam(defaultValue = "10") long size,
+                                                        @RequestParam(required = false) Integer status,
+                                                        @RequestParam(required = false) String keyword,
+                                                        Authentication auth) {
         Long userId = (Long) auth.getPrincipal();
-        return ResultVO.success(flashOrderService.listOrdersByUser(userId, page, size));
+        long pageSize = Math.min(Math.max(size, 1), MAX_PAGE_SIZE);
+        return ResultVO.success(flashOrderService.listOrdersByUser(userId, page, pageSize, status, keyword));
     }
 
     @GetMapping("/order/{id}")
-    public ResultVO<FlashOrder> getOrder(@PathVariable Long id) {
-        return ResultVO.success(flashOrderService.getOrderById(id));
+    public ResultVO<FlashOrder> getOrder(@PathVariable Long id, Authentication auth) {
+        Long userId = (Long) auth.getPrincipal();
+        return ResultVO.success(flashOrderService.getOrderById(id, userId));
     }
 
     @PostMapping("/order/{id}/pay")

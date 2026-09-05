@@ -85,11 +85,15 @@ CREATE TABLE IF NOT EXISTS `flash_order` (
 -- 初始化数据
 -- ============================================
 
--- 商品
+-- 商品。
+-- image 字段约定（三层均可，前端展示端会自动兜底不会裂图）：
+--   1) 完整 http(s) 图片地址：如 https://picsum.photos/seed/{seed}/400/400（同 seed 永远同图）；
+--   2) 本服务相对路径 /images/{filename}：由 flash-api 的 ImageController 从磁盘 images/ 目录读取；
+--   3) 留空(NULL)：前端自动使用 picsum 稳定占位图（seed=item-{id}，同商品同图）。
 INSERT IGNORE INTO `item` (`id`, `name`, `description`, `price`, `image`, `status`) VALUES
 (1, 'iPhone 17 Pro', 'A18 Pro 芯片，钛金属设计，4800 万像素', 8999.00, '/images/iPhone17pro.png', 1),
-(2, 'iPhone 16 Pro', 'A17 Pro 芯片，动作按钮，USB-C 接口', 6999.00, NULL, 1),
-(3, 'AirPods Pro 3', '自适应降噪，空间音频，USB-C', 1899.00, NULL, 1),
+(2, 'iPhone 16 Pro', 'A17 Pro 芯片，动作按钮，USB-C 接口', 6999.00, 'https://picsum.photos/seed/iPhone-16-Pro/400/400', 1),
+(3, 'AirPods Pro 3', '自适应降噪，空间音频，USB-C', 1899.00, 'https://picsum.photos/seed/AirPods-Pro-3/400/400', 1),
 (4, 'HUAWEI Mate 80 Pro', '麒麟 9100，卫星通信，XMAGE 影像', 6000.00, '/images/mate80pro.png', 1),
 (5, 'OPPO Find X9 Ultra', '骁龙 8 Elite Gen 5，7050mAh，100W 快充，10 倍光变', 7999.00, '/images/oppofindx9ultra.png', 1),
 (6, 'Xiaomi 17 Pro', '6.3 英寸 1.5K 小直屏，妙享背屏，192g 轻薄机身', 5599.00, '/images/xiaomi17pro.png', 1),

@@ -1,5 +1,7 @@
 package com.flashsale.model.vo;
 
+import com.fasterxml.jackson.databind.annotation.JsonSerialize;
+import com.fasterxml.jackson.databind.ser.std.ToStringSerializer;
 import com.flashsale.model.entity.FlashOrder;
 
 import java.math.BigDecimal;
@@ -7,6 +9,8 @@ import java.time.LocalDateTime;
 
 public class FlashOrderVO {
 
+    /** 雪花 ID 超 JS 安全整数（2^53），必须序列化为字符串防精度丢失 */
+    @JsonSerialize(using = ToStringSerializer.class)
     private Long id;
     private Long userId;
     private Long itemId;
@@ -16,6 +20,10 @@ public class FlashOrderVO {
     private LocalDateTime createTime;
     /** MQ 消息幂等键，Phase 3 异步下单时返回给客户端用于轮询 */
     private String messageKey;
+    /** 商品名称（联表查询带出，便于列表展示与按名称搜索） */
+    private String itemName;
+    /** 商品主图 URL（联表查询带出） */
+    private String itemImage;
 
     public static FlashOrderVO from(FlashOrder order) {
         FlashOrderVO vo = new FlashOrderVO();
@@ -91,5 +99,21 @@ public class FlashOrderVO {
 
     public void setMessageKey(String messageKey) {
         this.messageKey = messageKey;
+    }
+
+    public String getItemName() {
+        return itemName;
+    }
+
+    public void setItemName(String itemName) {
+        this.itemName = itemName;
+    }
+
+    public String getItemImage() {
+        return itemImage;
+    }
+
+    public void setItemImage(String itemImage) {
+        this.itemImage = itemImage;
     }
 }

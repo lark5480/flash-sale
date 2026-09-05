@@ -16,6 +16,10 @@ import org.springframework.stereotype.Component;
  * 消费重试耗尽（maxReconsumeTimes=3）后 RocketMQ 自动路由到 %DLQ% 主题的消息。
  * 此类消息已确认无法正常处理，记录 ERROR 日志用于人工介入或补偿处理。
  * <p>
+ * 终态标记与在途计数统一交给 {@link FlashOrderSettler} 收敛：重试耗尽同样是业务终态，
+ * 那笔预扣必须递减，否则在途数偏高会让后续库存重建少卖；标记已由主消费者写过时 SETNX 失败，
+ * 这里不会重复递减。
+ * <p>
  * 仅在 flash-api 中启用（flash.flash.consumer.enabled=true），
  * flash-admin 不创建此消费者以避免同组冲突。
  */
@@ -30,13 +34,17 @@ public class FlashOrderDeadLetterConsumer implements RocketMQListener<FlashOrder
     private static final Logger log = LoggerFactory.getLogger(FlashOrderDeadLetterConsumer.class);
 
     private final FlashSaleMetrics flashSaleMetrics;
+    private final FlashOrderSettler flashOrderSettler;
 
-    public FlashOrderDeadLetterConsumer(FlashSaleMetrics flashSaleMetrics) {
+    public FlashOrderDeadLetterConsumer(FlashSaleMetrics flashSaleMetrics,
+                                        FlashOrderSettler flashOrderSettler) {
         this.flashSaleMetrics = flashSaleMetrics;
+        this.flashOrderSettler = flashOrderSettler;
     }
 
     /**
-     * 处理死信消息 —— 重试耗尽仍失败，记录 ERROR 日志供人工补偿，并记录失败指标
+     * 处理死信消息 —— 重试耗尽仍失败，记录 ERROR 日志供人工补偿，记录失败指标，
+     * 并补写 FAILED 终态标记，避免客户端永远轮询到 PROCESSING。
      */
     @Override
     public void onMessage(FlashOrderMessage message) {
@@ -44,5 +52,6 @@ public class FlashOrderDeadLetterConsumer implements RocketMQListener<FlashOrder
                 message.getMessageKey(), message.getUserId(), message.getFlashSaleId(),
                 message.getItemId(), message.getFlashPrice());
         flashSaleMetrics.recordOrderFail();
+        flashOrderSettler.settleAndRelease(message, RocketMQConstants.RESULT_FAILED);
     }
 }

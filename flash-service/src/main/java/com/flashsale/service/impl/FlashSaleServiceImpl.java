@@ -26,6 +26,7 @@ import com.flashsale.model.vo.FlashSaleVO;
 import com.flashsale.service.FlashSaleService;
 import com.flashsale.service.config.CacheInvalidatePublisher;
 import com.flashsale.service.message.CacheInvalidateMessage;
+import com.flashsale.service.stock.FlashStockState;
 import com.github.benmanes.caffeine.cache.Cache;
 import org.springframework.beans.factory.annotation.Qualifier;
 
@@ -52,6 +53,7 @@ public class FlashSaleServiceImpl implements FlashSaleService {
     private final Cache<String, String> flashSaleDetailCache;
     private final Cache<String, String> activeFlashSaleCache;
     private final CacheInvalidatePublisher cacheInvalidatePublisher;
+    private final FlashStockState flashStockState;
 
     public FlashSaleServiceImpl(FlashSaleMapper flashSaleMapper,
                                 ItemMapper itemMapper,
@@ -59,7 +61,8 @@ public class FlashSaleServiceImpl implements FlashSaleService {
                                 ObjectMapper objectMapper,
                                 @Qualifier("flashSaleDetailCache") Cache<String, String> flashSaleDetailCache,
                                 @Qualifier("activeFlashSaleCache") Cache<String, String> activeFlashSaleCache,
-                                CacheInvalidatePublisher cacheInvalidatePublisher) {
+                                CacheInvalidatePublisher cacheInvalidatePublisher,
+                                FlashStockState flashStockState) {
         this.flashSaleMapper = flashSaleMapper;
         this.itemMapper = itemMapper;
         this.stringRedisTemplate = stringRedisTemplate;
@@ -67,10 +70,13 @@ public class FlashSaleServiceImpl implements FlashSaleService {
         this.flashSaleDetailCache = flashSaleDetailCache;
         this.activeFlashSaleCache = activeFlashSaleCache;
         this.cacheInvalidatePublisher = cacheInvalidatePublisher;
+        this.flashStockState = flashStockState;
     }
 
     @Override
     public FlashSale createFlashSale(FlashSale flashSale) {
+        checkItemOnSale(flashSale.getItemId());
+        validateTimeRange(flashSale);
         flashSale.setStatus(FlashSaleStatusEnum.PENDING.getCode());
         flashSaleMapper.insert(flashSale);
         log.info("[秒杀活动] 创建成功, id={}, itemId={}, flashPrice={}, stock={}",
@@ -84,10 +90,95 @@ public class FlashSaleServiceImpl implements FlashSaleService {
         if (existing == null) {
             throw new BusinessException(ResultCode.NOT_FOUND, "flash sale not found");
         }
+        validateTimeRange(flashSale);
+        checkEditAllowed(existing, flashSale);
+        checkStockEditable(existing, flashSale.getStock());
+        // 仅换品时校验新商品状态：历史活动所绑商品即使已下架，也不影响改价格/时间等其他字段
+        if (flashSale.getItemId() != null
+                && (existing.getItemId() == null || flashSale.getItemId().longValue() != existing.getItemId().longValue())) {
+            checkItemOnSale(flashSale.getItemId());
+        }
         flashSaleMapper.updateById(flashSale);
         evictCache(flashSale.getId());
         log.info("[秒杀活动] 更新成功, id={}", flashSale.getId());
         return flashSale;
+    }
+
+    /**
+     * 按状态收敛可编辑范围：
+     * <ul>
+     *   <li>ENDED：归档终态，任何编辑都拒绝；</li>
+     *   <li>ACTIVE：只允许改秒杀价 / 限购数量 / 结束时间。
+     *       换品会让已售订单与货架展示脱节；改开始时间会制造「ACTIVE 但 startTime 在未来」
+     *       的幽灵场次（不进入 C 端列表却占着状态），两者一并锁定。</li>
+     *   <li>PENDING / CANCELLED：全字段可编辑（CANCELLED 借此修正后重新启用）。</li>
+     * </ul>
+     */
+    private void checkEditAllowed(FlashSale existing, FlashSale incoming) {
+        if (existing.getStatus() == null) {
+            return;
+        }
+        if (existing.getStatus().equals(FlashSaleStatusEnum.ENDED.getCode())) {
+            throw new BusinessException(ResultCode.BAD_REQUEST,
+                    "已结束的秒杀活动为归档数据，不可编辑");
+        }
+        if (existing.getStatus().equals(FlashSaleStatusEnum.ACTIVE.getCode())) {
+            if (incoming.getItemId() != null
+                    && (existing.getItemId() == null || !incoming.getItemId().equals(existing.getItemId()))) {
+                throw new BusinessException(ResultCode.BAD_REQUEST,
+                        "进行中的秒杀活动不可更换商品，如需调整请先取消活动");
+            }
+            if (incoming.getStartTime() != null && !incoming.getStartTime().equals(existing.getStartTime())) {
+                throw new BusinessException(ResultCode.BAD_REQUEST,
+                        "进行中的秒杀活动不可修改开始时间");
+            }
+        }
+    }
+
+    /** endTime 必须在 startTime 之后（两者都携带时才校验，单字段更新不受影响） */
+    private void validateTimeRange(FlashSale flashSale) {
+        if (flashSale.getStartTime() != null && flashSale.getEndTime() != null
+                && !flashSale.getEndTime().isAfter(flashSale.getStartTime())) {
+            throw new BusinessException(ResultCode.BAD_REQUEST, "结束时间必须晚于开始时间");
+        }
+    }
+
+    /**
+     * stock 列同时是「管理员可编辑字段」和「已成交库存台账」（deductStock / restoreStock 都在写它）。
+     * 场次进行中时，后台表单里那个值很可能是打开页面那一刻的快照，全量 updateById 会把台账
+     * 直接改回旧值或更大的值，等于凭空放出已卖出的库存。
+     * 因此进行中的场次只允许改其他字段；要补库存须走「结束场次 → 改库存 → 重新激活」，
+     * 让重新激活时按 DB stock − 在途 重建 Redis 状态键。
+     * <p>
+     * stock 为 null 表示本次请求没带这个字段（MyBatis-Plus updateById 会跳过 null），不算改动。
+     */
+    private void checkStockEditable(FlashSale existing, Integer newStock) {
+        if (newStock == null || newStock.equals(existing.getStock())) {
+            return;
+        }
+        if (existing.getStatus() != null && existing.getStatus().equals(FlashSaleStatusEnum.ACTIVE.getCode())) {
+            throw new BusinessException(ResultCode.BAD_REQUEST,
+                    "进行中的秒杀活动不能修改库存，请先结束活动再调整。当前库存=" + existing.getStock()
+                            + "，请求库存=" + newStock);
+        }
+    }
+
+    /**
+     * 校验秒杀活动绑定的商品必须存在且处于上架状态。
+     * <p>下架商品不允许加入秒杀活动（创建或换品时校验），从源头保证
+     * 「能上秒杀货架的商品一定是上架状态」。
+     */
+    private void checkItemOnSale(Long itemId) {
+        if (itemId == null) {
+            throw new BusinessException(ResultCode.BAD_REQUEST, "秒杀活动必须绑定商品");
+        }
+        Item item = itemMapper.selectById(itemId);
+        if (item == null) {
+            throw new BusinessException(ResultCode.NOT_FOUND, "商品不存在，无法加入秒杀活动");
+        }
+        if (!Integer.valueOf(1).equals(item.getStatus())) {
+            throw new BusinessException(ResultCode.BAD_REQUEST, "商品已下架，不能加入秒杀活动，请先上架该商品");
+        }
     }
 
     @Override
@@ -95,6 +186,13 @@ public class FlashSaleServiceImpl implements FlashSaleService {
         FlashSale existing = flashSaleMapper.selectById(id);
         if (existing == null) {
             throw new BusinessException(ResultCode.NOT_FOUND, "flash sale not found");
+        }
+        // 进行中在售、已结束归档的活动删除会破坏台账，仅允许清理未开始/已取消的场次
+        if (existing.getStatus() != null
+                && (existing.getStatus().equals(FlashSaleStatusEnum.ACTIVE.getCode())
+                        || existing.getStatus().equals(FlashSaleStatusEnum.ENDED.getCode()))) {
+            throw new BusinessException(ResultCode.BAD_REQUEST,
+                    "进行中或已结束的秒杀活动不可删除");
         }
         flashSaleMapper.deleteById(id);
         evictCache(id);
@@ -175,6 +273,45 @@ public class FlashSaleServiceImpl implements FlashSaleService {
         if (flashSale == null) {
             throw new BusinessException(ResultCode.NOT_FOUND, "flash sale not found");
         }
+        FlashSaleStatusEnum current = FlashSaleStatusEnum.codeOf(flashSale.getStatus());
+        FlashSaleStatusEnum target = FlashSaleStatusEnum.codeOf(status);
+        // 状态机守卫：只放行枚举里定义的合法流转，脏请求/重复提交一律拦截
+        if (current == null || target == null || !current.canTransitTo(target)) {
+            throw new BusinessException(ResultCode.BAD_REQUEST,
+                    "非法状态流转：" + (current == null ? "未知" : current.getDesc())
+                            + " → " + (target == null ? "未知" : target.getDesc()));
+        }
+        LocalDateTime now = LocalDateTime.now();
+        // 重新启用已取消的活动（CANCELLED→PENDING），按场次时间自动恢复：
+        // - 已过原定结束时间：拒绝，提示先编辑把时间改到未来；
+        // - 开始时间已过（曾被开售、只是被中途停掉）：直接恢复为「进行中」，重新启用即恢复售卖，
+        //   不走「待开始 → 定时任务扫描」的 ≤60s 停售空窗，下面 ACTIVE 分支会重建库存键并预热；
+        // - 开始时间在未来（未开售就被取消）：回到「待开始」，到点后由定时任务自动开售。
+        if (current == FlashSaleStatusEnum.CANCELLED && target == FlashSaleStatusEnum.PENDING) {
+            if (flashSale.getEndTime() == null || !flashSale.getEndTime().isAfter(now)) {
+                throw new BusinessException(ResultCode.BAD_REQUEST,
+                        "该活动已过原定结束时间，请先编辑调整开始/结束时间后再重新启用");
+            }
+            if (flashSale.getStartTime() != null && !flashSale.getStartTime().isAfter(now)) {
+                target = FlashSaleStatusEnum.ACTIVE;
+                status = FlashSaleStatusEnum.ACTIVE.getCode();
+                log.info("[秒杀活动] 重新启用时开始时间已过，直接恢复为进行中, id={}", id);
+            }
+        }
+        // 任何通向「待开始 / 进行中」的流转（手动启用、取消后重新启用、定时任务激活）都要求
+        // 绑定商品处于上架状态，杜绝「取消活动 → 下架商品 → 重新启用 → 到点自动激活」旁路，
+        // 防止下架商品复活重新登上秒杀货架。
+        if (target == FlashSaleStatusEnum.PENDING || target == FlashSaleStatusEnum.ACTIVE) {
+            Item item = itemMapper.selectById(flashSale.getItemId());
+            if (item == null) {
+                throw new BusinessException(ResultCode.NOT_FOUND, "商品不存在，无法启用该秒杀活动");
+            }
+            if (!Integer.valueOf(1).equals(item.getStatus())) {
+                throw new BusinessException(ResultCode.BAD_REQUEST,
+                        "该活动绑定的商品已下架，请先上架商品（或在编辑中更换商品）后再启用");
+            }
+        }
+        Integer previousStatus = flashSale.getStatus();
         flashSale.setStatus(status);
         flashSaleMapper.updateById(flashSale);
         log.info("[秒杀活动] 状态变更, id={}, newStatus={}", id, status);
@@ -183,22 +320,26 @@ public class FlashSaleServiceImpl implements FlashSaleService {
         evictCache(id);
 
         // 激活时预热 Redis 缓存
-        if (status.equals(FlashSaleStatusEnum.ACTIVE.getCode())) {
+        int activeCode = FlashSaleStatusEnum.ACTIVE.getCode();
+        if (status.equals(activeCode)) {
+            // 从非活跃状态重新激活：上一周期遗留的库存键仍持有按旧 DB stock 算出的值，
+            // ensureStockKey 看到键已存在会跳过重建，停售期间调大/调小的库存永远不会生效。
+            // 非活跃状态没有购买流量，先删旧键再由 warmUpRedis 按新 DB stock − 在途 重建是安全的。
+            if (previousStatus == null || previousStatus.intValue() != activeCode) {
+                flashStockState.deleteStockKey(id);
+            }
             warmUpRedis(flashSale);
         }
     }
 
     /**
-     * 预热 Redis 缓存：库存 + 详情
+     * 预热 Redis：库存状态键（仅缺失时补建）+ 活动详情缓存
      */
     private void warmUpRedis(FlashSale flashSale) {
         Long saleId = flashSale.getId();
         try {
-            String stockKey = RedisConstants.FLASH_STOCK_KEY + saleId;
-            stringRedisTemplate.opsForValue().set(stockKey,
-                    String.valueOf(flashSale.getStock()),
-                    RedisConstants.randomTtl(RedisConstants.FLASH_CACHE_TTL),
-                    TimeUnit.SECONDS);
+            // 库存不是缓存而是业务状态：键已存在时绝不覆盖，缺失时按 DB stock − 在途 补建
+            flashStockState.ensureStockKey(flashSale);
 
             String saleKey = RedisConstants.FLASH_SALE_KEY + saleId;
             FlashSaleVO vo = buildFlashSaleVO(flashSale);
@@ -295,8 +436,10 @@ public class FlashSaleServiceImpl implements FlashSaleService {
         flashSaleDetailCache.invalidate(caffeineKey);
         activeFlashSaleCache.invalidate(RedisConstants.ACTIVE_FLASH_SALE_LIST_KEY);
         stringRedisTemplate.delete(RedisConstants.FLASH_SALE_KEY + saleId);
-        stringRedisTemplate.delete(RedisConstants.FLASH_STOCK_KEY + saleId);
         stringRedisTemplate.delete(RedisConstants.ACTIVE_FLASH_SALE_LIST_KEY);
+
+        // 故意不删 flash:stock:{id}：它是库存状态而非缓存，删掉等于把权威计数交给滞后的 DB 重建。
+        // 库存键的生命周期只由「场次结束 + 宽限期」的 TTL 决定。
 
         // 广播缓存失效，通知其他节点 invalidate 各自的 Caffeine
         cacheInvalidatePublisher.publish(CacheInvalidateMessage.CACHE_FLASH_SALE_DETAIL, caffeineKey);

@@ -6,29 +6,32 @@ scrape_configs:
   - job_name: 'flash-api'
     metrics_path: '/actuator/prometheus'
     static_configs:
-      - targets: ['api:8081']
+      - targets: ['host.docker.internal:8081']
         labels:
           service: 'flash-api'
 
   - job_name: 'flash-admin'
     metrics_path: '/actuator/prometheus'
     static_configs:
-      - targets: ['admin:8082']
+      - targets: ['host.docker.internal:8082']
         labels:
           service: 'flash-admin'
 
-  - job_name: 'flash-gateway'
-    metrics_path: '/actuator/prometheus'
-    static_configs:
-      - targets: ['gateway:8080']
-        labels:
-          service: 'flash-gateway'
-
-  - job_name: 'rocketmq-broker'
-    static_configs:
-      - targets: ['flash-rocketmq-broker:5557']
-        labels:
-          service: 'rocketmq-broker'
+  # ---- 本地开发场景停用以下 job（未在宿主机跑 gateway；broker exporter 未监听 5557），避免 Targets 出现 DOWN 噪音 ----
+  # 全量容器化部署（docker compose up -d 全量）时再放开：
+  #
+  # - job_name: 'flash-gateway'
+  #   metrics_path: '/actuator/prometheus'
+  #   static_configs:
+  #     - targets: ['host.docker.internal:8080']
+  #       labels:
+  #         service: 'flash-gateway'
+  #
+  # - job_name: 'rocketmq-broker'
+  #   static_configs:
+  #     - targets: ['flash-rocketmq-broker:5557']
+  #       labels:
+  #         service: 'rocketmq-broker'
 
   - job_name: 'node-exporter'
     static_configs:

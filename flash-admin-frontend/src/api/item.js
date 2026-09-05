@@ -19,3 +19,7 @@ export function updateItem(data) {
 export function deleteItem(id) {
   return request.delete(`/admin/item/${id}`)
 }
+
+export function updateItemStatus(id, status) {
+  return request.put(`/admin/item/${id}/status`, { status })
+}

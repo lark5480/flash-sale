@@ -52,6 +52,18 @@ public class RedisConfig {
     }
 
     /**
+     * 秒杀库存归还 Lua 脚本 Bean
+     * 与扣减反向，且只对已存在的 Key 生效，避免为已结束场次建出无 TTL 的脏键
+     */
+    @Bean
+    public DefaultRedisScript<Long> stockRestoreScript() {
+        DefaultRedisScript<Long> script = new DefaultRedisScript<>();
+        script.setLocation(new ClassPathResource("scripts/stock_restore.lua"));
+        script.setResultType(Long.class);
+        return script;
+    }
+
+    /**
      * 滑动窗口限流 Lua 脚本 Bean
      * ZSET 记录请求时间戳，窗口外的自动清理
      */

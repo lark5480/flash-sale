@@ -12,7 +12,16 @@ public interface FlashOrderService {
 
     FlashOrder getOrderById(Long id);
 
-    IPage<FlashOrder> listOrdersByUser(Long userId, long page, long size);
+    /** 用户查询自己的订单，非本人订单抛 FORBIDDEN */
+    FlashOrder getOrderById(Long id, Long userId);
+
+    /**
+     * 分页查询用户的订单（带商品名称，支持状态与关键词筛选）
+     *
+     * @param status  订单状态，null 表示全部
+     * @param keyword 关键词（订单号 / 商品名称），null 或空白表示不筛选
+     */
+    IPage<FlashOrderVO> listOrdersByUser(Long userId, long page, long size, Integer status, String keyword);
 
     IPage<FlashOrder> listAllOrders(long page, long size);
 

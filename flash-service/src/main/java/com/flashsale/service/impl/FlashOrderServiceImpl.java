@@ -20,16 +20,17 @@ import com.flashsale.service.FlashOrderService;
 import com.flashsale.service.message.FlashOrderMessage;
 import com.flashsale.common.util.SnowflakeIdGenerator;
 import com.flashsale.service.producer.FlashOrderProducer;
+import com.flashsale.service.stock.FlashStockState;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.data.redis.core.script.DefaultRedisScript;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.util.StringUtils;
 
 import java.time.LocalDateTime;
 import java.util.List;
-import java.util.concurrent.TimeUnit;
 
 /**
  * 秒杀订单 Service 实现
@@ -48,6 +49,7 @@ public class FlashOrderServiceImpl implements FlashOrderService {
     private final FlashSaleMapper flashSaleMapper;
     private final StringRedisTemplate stringRedisTemplate;
     private final DefaultRedisScript<Long> stockDeductScript;
+    private final FlashStockState flashStockState;
     private final FlashOrderProducer flashOrderProducer;
     private final SnowflakeIdGenerator snowflakeIdGenerator;
 
@@ -55,12 +57,14 @@ public class FlashOrderServiceImpl implements FlashOrderService {
                                  FlashSaleMapper flashSaleMapper,
                                  StringRedisTemplate stringRedisTemplate,
                                  DefaultRedisScript<Long> stockDeductScript,
+                                 FlashStockState flashStockState,
                                  FlashOrderProducer flashOrderProducer,
                                  SnowflakeIdGenerator snowflakeIdGenerator) {
         this.flashOrderMapper = flashOrderMapper;
         this.flashSaleMapper = flashSaleMapper;
         this.stringRedisTemplate = stringRedisTemplate;
         this.stockDeductScript = stockDeductScript;
+        this.flashStockState = flashStockState;
         this.flashOrderProducer = flashOrderProducer;
         this.snowflakeIdGenerator = snowflakeIdGenerator;
     }
@@ -82,11 +86,18 @@ public class FlashOrderServiceImpl implements FlashOrderService {
     }
 
     @Override
-    public IPage<FlashOrder> listOrdersByUser(Long userId, long page, long size) {
-        LambdaQueryWrapper<FlashOrder> wrapper = new LambdaQueryWrapper<>();
-        wrapper.eq(FlashOrder::getUserId, userId)
-                .orderByDesc(FlashOrder::getCreateTime);
-        return flashOrderMapper.selectPage(new Page<>(page, size), wrapper);
+    public FlashOrder getOrderById(Long id, Long userId) {
+        FlashOrder order = getOrderById(id);
+        if (!order.getUserId().equals(userId)) {
+            throw new BusinessException(ResultCode.FORBIDDEN, "无权操作此订单");
+        }
+        return order;
+    }
+
+    @Override
+    public IPage<FlashOrderVO> listOrdersByUser(Long userId, long page, long size, Integer status, String keyword) {
+        String kw = StringUtils.hasText(keyword) ? keyword.trim() : null;
+        return flashOrderMapper.selectUserOrderPage(new Page<>(page, size), userId, status, kw);
     }
 
     @Override
@@ -106,18 +117,19 @@ public class FlashOrderServiceImpl implements FlashOrderService {
     }
 
     /**
-     * 查询订单状态（基于 messageKey 查消息处理结果）
+     * 查询订单处理状态（基于 MQ 消息处理结果标记）
+     * <p>
+     * 结果标记只由消费者在业务终态后写入，因此 PROCESSING 同时覆盖
+     * 「消息尚未被消费」与「系统异常正在重试中」两种情况。
      *
      * @param messageKey MQ 消息唯一键
-     * @return 订单状态："PROCESSING" 表示消息尚未被消费，"DONE" 表示已处理
+     * @return {@code DONE} 订单已创建、{@code FAILED} 业务终态失败、{@code PROCESSING} 仍在处理
      */
+    @Override
     public String getOrderStatus(String messageKey) {
-        String idempotentKey = RocketMQConstants.MSG_PROCESSED_KEY + messageKey;
-        String value = stringRedisTemplate.opsForValue().get(idempotentKey);
-        if (value != null) {
-            return "DONE";
-        }
-        return "PROCESSING";
+        String status = stringRedisTemplate.opsForValue()
+                .get(RocketMQConstants.MSG_RESULT_KEY + messageKey);
+        return status != null ? status : RocketMQConstants.RESULT_PROCESSING;
     }
 
     /**
@@ -153,17 +165,19 @@ public class FlashOrderServiceImpl implements FlashOrderService {
                 throw new BusinessException(ResultCode.FLASH_ENDED);
             }
 
-            // 确保 Redis 缓存存在
-            ensureRedisStock(flashSale);
+            // 确保 Redis 库存状态键存在（缺失时按 DB stock - 在途 重建）
+            flashStockState.ensureStockKey(flashSale);
 
             // ========== 2. Redis Lua 原子扣库存 ==========
-            String stockKey = RedisConstants.FLASH_STOCK_KEY + flashSaleId;
-            String userKey = RedisConstants.FLASH_USER_PURCHASED_KEY + flashSaleId + ":" + userId;
+            long stateTtl = RedisConstants.stockTtlSeconds(flashSale.getEndTime());
             Long luaResult = stringRedisTemplate.execute(
                     stockDeductScript,
-                    List.of(stockKey, userKey),
+                    List.of(FlashStockState.stockKey(flashSaleId),
+                            FlashStockState.userPurchasedKey(flashSaleId, userId),
+                            FlashStockState.inflightKey(flashSaleId)),
                     String.valueOf(flashSale.getLimitPerUser()),
-                    String.valueOf(RedisConstants.FLASH_CACHE_TTL)
+                    String.valueOf(stateTtl),
+                    String.valueOf(stateTtl)
             );
 
             if (luaResult == null || luaResult == -1) {
@@ -189,9 +203,8 @@ public class FlashOrderServiceImpl implements FlashOrderService {
                 flashOrderProducer.sendCreateOrderMessage(message);
             } catch (Exception e) {
                 log.error("[秒杀下单] MQ 发送失败，回滚 Redis 库存, flashSaleId={}, userId={}", flashSaleId, userId, e);
-                // 回滚 Redis 库存
-                stringRedisTemplate.opsForValue().increment(stockKey);
-                stringRedisTemplate.opsForValue().decrement(userKey);
+                // 回滚 Redis：库存 +1、限购计数 -1、在途计数 -1（消息未进入 MQ，不再是在途）
+                flashStockState.rollbackReservation(flashSaleId, userId);
                 throw new BusinessException(ResultCode.SYSTEM_ERROR, "系统繁忙，请稍后重试");
             }
 
@@ -231,33 +244,6 @@ public class FlashOrderServiceImpl implements FlashOrderService {
         throw new BusinessException(ResultCode.SYSTEM_ERROR, "系统异常，请稍后重试");
     }
 
-    /**
-     * 确保 Redis 库存缓存存在
-     * <p>
-     * 仅在 Key 不存在时从 DB 加载。不根据值判断，
-     * 因为 stock=0 是合法的售罄状态，重新加载会导致超卖。
-     */
-    private void ensureRedisStock(FlashSale flashSale) {
-        String stockKey = RedisConstants.FLASH_STOCK_KEY + flashSale.getId();
-        // 快速路径：key 已存在则跳过（非原子，仅用于减少 SETNX 调用）
-        Boolean hasKey = stringRedisTemplate.hasKey(stockKey);
-        if (Boolean.TRUE.equals(hasKey)) {
-            return;
-        }
-        // 使用 SETNX 原子操作，防止多节点并发覆盖已被 Lua 扣减的库存值
-        Boolean setResult = stringRedisTemplate.opsForValue()
-                .setIfAbsent(stockKey, String.valueOf(flashSale.getStock()),
-                        RedisConstants.randomTtl(RedisConstants.FLASH_CACHE_TTL),
-                        TimeUnit.SECONDS);
-        if (Boolean.TRUE.equals(setResult)) {
-            log.info("[缓存补充] Redis 库存 Key SETNX 成功, flashSaleId={}, stock={}",
-                    flashSale.getId(), flashSale.getStock());
-        } else {
-            log.info("[缓存补充] Redis 库存 Key 已被其他节点设置, flashSaleId={}",
-                    flashSale.getId());
-        }
-    }
-
     @Override
     public List<FlashOrder> getExpiredPendingOrders(int timeoutMinutes) {
         LocalDateTime deadline = LocalDateTime.now().minusMinutes(timeoutMinutes);
@@ -277,14 +263,8 @@ public class FlashOrderServiceImpl implements FlashOrderService {
         // 2. DB 库存归还
         flashSaleMapper.restoreStock(order.getFlashSaleId(), 1);
 
-        // 3. Redis 库存归还
-        String stockKey = RedisConstants.FLASH_STOCK_KEY + order.getFlashSaleId();
-        stringRedisTemplate.opsForValue().increment(stockKey);
-
-        // 4. Redis 用户购买计数递减
-        String userKey = RedisConstants.FLASH_USER_PURCHASED_KEY
-                + order.getFlashSaleId() + ":" + order.getUserId();
-        stringRedisTemplate.opsForValue().decrement(userKey);
+        // 3. Redis 库存/限购/在途统一归还（订单已落库，在途由消费者递减，此处不再动）
+        flashStockState.returnOrderStock(order.getFlashSaleId(), order.getUserId());
 
         log.info("[超时取消] 订单已取消并归还库存, orderId={}, flashSaleId={}, userId={}",
                 order.getId(), order.getFlashSaleId(), order.getUserId());
@@ -354,14 +334,8 @@ public class FlashOrderServiceImpl implements FlashOrderService {
         // 归还 DB 库存
         flashSaleMapper.restoreStock(order.getFlashSaleId(), 1);
 
-        // 归还 Redis 库存
-        String stockKey = RedisConstants.FLASH_STOCK_KEY + order.getFlashSaleId();
-        stringRedisTemplate.opsForValue().increment(stockKey);
-
-        // 归还用户购买计数
-        String userKey = RedisConstants.FLASH_USER_PURCHASED_KEY
-                + order.getFlashSaleId() + ":" + order.getUserId();
-        stringRedisTemplate.opsForValue().decrement(userKey);
+        // 归还 Redis 库存/限购计数（订单已落库，在途已由消费者递减）
+        flashStockState.returnOrderStock(order.getFlashSaleId(), order.getUserId());
 
         log.info("[退款] 订单退款成功, orderId={}, flashSaleId={}, userId={}",
                 orderId, order.getFlashSaleId(), order.getUserId());
@@ -386,14 +360,8 @@ public class FlashOrderServiceImpl implements FlashOrderService {
         // 归还 DB 库存
         flashSaleMapper.restoreStock(order.getFlashSaleId(), 1);
 
-        // 归还 Redis 库存
-        String stockKey = RedisConstants.FLASH_STOCK_KEY + order.getFlashSaleId();
-        stringRedisTemplate.opsForValue().increment(stockKey);
-
-        // 归还用户购买计数
-        String userKey = RedisConstants.FLASH_USER_PURCHASED_KEY
-                + order.getFlashSaleId() + ":" + order.getUserId();
-        stringRedisTemplate.opsForValue().decrement(userKey);
+        // 归还 Redis 库存/限购计数（订单已落库，在途已由消费者递减）
+        flashStockState.returnOrderStock(order.getFlashSaleId(), order.getUserId());
 
         log.info("[退款] 用户退款成功, orderId={}, flashSaleId={}, userId={}",
                 orderId, order.getFlashSaleId(), userId);
@@ -446,6 +414,11 @@ public class FlashOrderServiceImpl implements FlashOrderService {
             return null;
         }
 
+        // ========== 限购 DB 兜底 ==========
+        // 限购原本只由 Redis 限购计数键守住，而那个键会过期/丢失：
+        // 一旦丢失，「每人限购 N 件」在下侧无声变成「不限购」。
+        checkPurchaseLimit(flashSaleId, order.getUserId());
+
         // 乐观锁扣库存
         int updated = flashSaleMapper.deductStock(flashSaleId);
         if (updated == 0) {
@@ -458,5 +431,31 @@ public class FlashOrderServiceImpl implements FlashOrderService {
         log.info("[异步下单] 事务提交: deductStock + createOrder, orderId={}, messageKey={}",
                 order.getId(), order.getMessageKey());
         return order;
+    }
+
+    /**
+     * 限购 DB 兜底校验（供 {@link #deductStockAndCreateOrder} 在扣库存前调用）。
+     * <p>
+     * limitPerUser 为 null 或 &le; 0 视为不限购，与 Redis 侧 Lua 的放行口径一致。
+     * <p>
+     * 这里用普通 COUNT 而不加 FOR UPDATE：FlashOrderConsumer 在整个调用期间持有
+     * {@code flash:lock:{flashSaleId}} 的 Redisson 锁，同一场次的消费已被串行化，
+     * 且上一笔事务在锁释放前就已提交，不存在「两个并发事务各自 COUNT 到 0」的窗口。
+     */
+    private void checkPurchaseLimit(Long flashSaleId, Long userId) {
+        FlashSale flashSale = flashSaleMapper.selectById(flashSaleId);
+        if (flashSale == null) {
+            throw new BusinessException(ResultCode.NOT_FOUND, "秒杀活动不存在或已删除");
+        }
+        Integer limitPerUser = flashSale.getLimitPerUser();
+        if (limitPerUser == null || limitPerUser <= 0) {
+            return;
+        }
+        int occupied = flashOrderMapper.countQuotaOccupied(flashSaleId, userId);
+        if (occupied >= limitPerUser) {
+            log.warn("[异步下单] 限购兜底拦截, flashSaleId={}, userId={}, occupied={}, limit={}",
+                    flashSaleId, userId, occupied, limitPerUser);
+            throw new BusinessException(ResultCode.FLASH_REPEAT, "已达每人限购数量");
+        }
     }
 }

@@ -45,15 +45,16 @@ flash-sale
 - 注册 / 登录（JWT 双 Token：accessToken + refreshToken）
 - 验证码校验（算术题验证码，防撞库/防刷）
 - 浏览商品列表、查看商品详情
-- 查看进行中的秒杀活动
+- 查看进行中的秒杀活动（倒计时：≥ 1 天显示 `3天 02:15:09`，< 1 天显示 `02:15:09`，< 1 小时红色紧急态，< 5 分钟最后冲刺脉冲；未开始时显示「距开始」）
 - 秒杀下单（验证码 + Redis Lua 原子扣库存 + RocketMQ 异步创建订单）
 - 轮询订单处理状态
-- 查看我的订单
+- 查看我的订单（关键词搜索 + 状态筛选 + 完整分页：首页/末页/跳页/每页条数）
 - 支付订单 / 取消订单 / 退款 / 删除已取消订单
 
 ### 管理端
 - 管理员登录（验证码校验）
-- 商品 CRUD（上架/下架）
+- 数据控制台（今日订单/成交额 KPI、近 7 日订单趋势、订单状态分布、进行中秒杀与最近订单快捷看板）
+- 商品 CRUD（上架/下架；上架商品需先下架后才能编辑/删除，被秒杀场次引用的商品不可删除）
 - 秒杀活动 CRUD + 状态管理（激活时自动预热 Redis 缓存，更新时自动清除缓存）
 - 订单列表查看 / 支付 / 退款 / 删除已取消订单
 - 用户列表 + 启用/禁用
@@ -86,7 +87,7 @@ flash-sale
   - Dashboard 自动加载（Provisioning）：数据源 + 看板 JSON 版本控制，重启不丢失
   - Dashboard：JVM 堆内存 / GC / CPU / HTTP QPS & P99 / 下单成功失败 & QPS & 成功率
   - ⚠️ 关键配置：`management.metrics.distribution.percentiles-histogram.http.server.requests: true`（暴露 `_bucket` 指标，否则 P99 计算为 "No data"）
-  - ⚠️ 本地开发：Prometheus 用 `host.docker.internal` 访问宿主机上运行的应用（见 `docker/prometheus/prometheus.yml`）
+  - ⚠️ 后端跑在宿主机：`docker/prometheus/prometheus.yml` 的 targets 已默认指向 `host.docker.internal:8081` / `8082` / `8080`；若改为全容器部署（api/admin/gateway 也进 Compose），需把对应 target 改回容器名 `api:8081` / `admin:8082` / `gateway:8080`
 
 ### 自动化
 - 秒杀活动状态自动流转（定时任务：待开始 -> 进行中 -> 已结束）
@@ -196,7 +197,7 @@ cd flash-admin-frontend && npm install && npm run dev
 | GET | /api/flash-sale/{id} | 秒杀活动详情 | 是 |
 | POST | /api/flash-sale/{id}/purchase | 秒杀下单（需验证码） | 是 |
 | GET | /api/order/status?messageKey= | 轮询订单状态 | 是 |
-| GET | /api/order/list | 我的订单 | 是 |
+| GET | /api/order/list?page=1&size=10&status=&keyword= | 我的订单（分页 + 状态筛选 + 关键词搜索） | 是 |
 | GET | /api/order/{id} | 订单详情 | 是 |
 | POST | /api/order/{id}/pay | 支付订单 | 是 |
 | POST | /api/order/{id}/cancel | 取消订单 | 是 |

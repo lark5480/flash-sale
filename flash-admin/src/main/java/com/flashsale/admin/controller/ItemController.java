@@ -15,6 +15,8 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
+import java.util.Map;
+
 @RestController
 @RequestMapping("/admin/item")
 public class ItemController {
@@ -50,5 +52,11 @@ public class ItemController {
     @GetMapping("/{id}")
     public ResultVO<ItemVO> detail(@PathVariable Long id) {
         return ResultVO.success(ItemVO.from(itemService.getItemById(id)));
+    }
+
+    @PutMapping("/{id}/status")
+    public ResultVO<Void> changeStatus(@PathVariable Long id, @RequestBody Map<String, Integer> body) {
+        itemService.changeStatus(id, body.get("status"));
+        return ResultVO.success();
     }
 }
