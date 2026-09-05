@@ -17,6 +17,9 @@ import java.util.Set;
 public class AuthGlobalFilter implements GlobalFilter, Ordered {
 
     private static final String TOKEN_PREFIX = "Bearer ";
+    /** 身份透传头：客户端可自带同名头伪造身份，进入网关先统一剥离，鉴权通过后按 JWT 重写 */
+    private static final String HEADER_USER_ID = "X-User-Id";
+    private static final String HEADER_USER_ROLE = "X-User-Role";
     private static final Set<String> SKIP_PATHS = Set.of(
             "/api/auth/register",
             "/api/auth/login",
@@ -44,6 +47,17 @@ public class AuthGlobalFilter implements GlobalFilter, Ordered {
 
     @Override
     public Mono<Void> filter(ServerWebExchange exchange, GatewayFilterChain chain) {
+        // X-User-Id / X-User-Role 不是信任边界：客户端可自带同名请求头伪装身份。
+        // 进入网关即统一剥离（放行路径不再携带任何伪造值），仅下方鉴权成功分支按 JWT 重写真实身份。
+        exchange = exchange.mutate()
+                .request(exchange.getRequest().mutate()
+                        .headers(headers -> {
+                            headers.remove(HEADER_USER_ID);
+                            headers.remove(HEADER_USER_ROLE);
+                        })
+                        .build())
+                .build();
+
         String path = exchange.getRequest().getURI().getPath();
 
         if (SKIP_PATHS.contains(path)) {
@@ -83,8 +97,8 @@ public class AuthGlobalFilter implements GlobalFilter, Ordered {
 
             exchange = exchange.mutate()
                     .request(exchange.getRequest().mutate()
-                            .header("X-User-Id", String.valueOf(userId))
-                            .header("X-User-Role", role)
+                            .header(HEADER_USER_ID, String.valueOf(userId))
+                            .header(HEADER_USER_ROLE, role)
                             .build())
                     .build();
         } catch (Exception e) {

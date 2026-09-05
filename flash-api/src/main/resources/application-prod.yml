@@ -5,14 +5,14 @@ spring:
     nacos:
       discovery:
         server-addr: ${NACOS_SERVER_ADDR:127.0.0.1:8848}
+        namespace: ${NACOS_NAMESPACE}
+        username: ${NACOS_USERNAME}
+        password: ${NACOS_PASSWORD}
     sentinel:
       transport:
         dashboard: localhost:8718
       eager: true
       port: 8719
-        namespace: ${NACOS_NAMESPACE}
-        username: ${NACOS_USERNAME}
-        password: ${NACOS_PASSWORD}
   datasource:
     url: ${DB_URL}
     username: ${DB_USERNAME}
@@ -53,10 +53,10 @@ management:
   endpoints:
     web:
       exposure:
-        include: health,info,prometheus,metrics,env,beans
+        include: health,info,prometheus
   endpoint:
     health:
-      show-details: always
+      show-details: when-authorized
   metrics:
     tags:
       application: ${spring.application.name}
