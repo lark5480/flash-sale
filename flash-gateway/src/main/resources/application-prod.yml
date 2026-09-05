@@ -8,20 +8,6 @@ spring:
         namespace: ${NACOS_NAMESPACE}
         username: ${NACOS_USERNAME}
         password: ${NACOS_PASSWORD}
-    gateway:
-      routes:
-        - id: flash-api
-          uri: lb://flash-api
-          predicates:
-            - Path=/api/**
-        - id: flash-api-images
-          uri: lb://flash-api
-          predicates:
-            - Path=/images/**
-        - id: flash-admin
-          uri: lb://flash-admin
-          predicates:
-            - Path=/admin/**
 
 jwt:
   secret: ${JWT_SECRET}

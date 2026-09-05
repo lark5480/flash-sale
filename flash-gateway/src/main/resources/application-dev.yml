@@ -7,20 +7,6 @@ spring:
         # 使用默认 public 命名空间，重启不丢失
         username: nacos
         password: nacos
-    gateway:
-      routes:
-        - id: flash-api
-          uri: lb://flash-api
-          predicates:
-            - Path=/api/**
-        - id: flash-api-images
-          uri: lb://flash-api
-          predicates:
-            - Path=/images/**
-        - id: flash-admin
-          uri: lb://flash-admin
-          predicates:
-            - Path=/admin/**
 
 jwt:
   secret: flash-sale-secret-key-min-256-bits-long-for-hs256

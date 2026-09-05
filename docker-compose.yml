@@ -119,8 +119,13 @@ services:
       - mysql
       - redis
       - rocketmq-namesrv
-    ports:
-      - "8081:8081"
+    # 不映射宿主端口：直连 8081 会绕过网关鉴权，对外统一走 gateway :8080。
+    # 【本地开发（后端跑宿主机）】保持注释：宿主机 8081 由本地 flash-api 进程占用，
+    #   Prometheus 通过 host.docker.internal:8081 抓取。
+    # 【全量容器化部署】放开下方端口映射，并把 docker/prometheus/prometheus.yml
+    #   中 flash-api 的 targets 从 host.docker.internal:8081 改回容器名 api:8081。
+    # ports:
+    #   - "8081:8081"
     environment:
       - SPRING_PROFILES_ACTIVE=docker
 
@@ -135,8 +140,13 @@ services:
       - nacos
       - mysql
       - redis
-    ports:
-      - "8082:8082"
+    # 不映射宿主端口：对外统一走 gateway :8080。
+    # 【本地开发（后端跑宿主机）】保持注释：宿主机 8082 由本地 flash-admin 进程占用，
+    #   Prometheus 通过 host.docker.internal:8082 抓取。
+    # 【全量容器化部署】放开下方端口映射，并把 docker/prometheus/prometheus.yml
+    #   中 flash-admin 的 targets 从 host.docker.internal:8082 改回容器名 admin:8082。
+    # ports:
+    #   - "8082:8082"
     environment:
       - SPRING_PROFILES_ACTIVE=docker
 

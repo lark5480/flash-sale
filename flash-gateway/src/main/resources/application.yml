@@ -6,15 +6,32 @@ spring:
     name: flash-gateway
   profiles:
     active: ${SPRING_PROFILES_ACTIVE:dev}
+  cloud:
+    # 路由与 profile 无关，统一在此声明；Spring Boot 中 profile 级 List 会整体覆盖基础值，
+    # 缺失该配置的 profile 会导致网关不转发任何请求。
+    gateway:
+      routes:
+        - id: flash-api
+          uri: lb://flash-api
+          predicates:
+            - Path=/api/**
+        - id: flash-api-images
+          uri: lb://flash-api
+          predicates:
+            - Path=/images/**
+        - id: flash-admin
+          uri: lb://flash-admin
+          predicates:
+            - Path=/admin/**
 
 management:
   endpoints:
     web:
       exposure:
-        include: health,info,prometheus,metrics
+        include: health,info,prometheus
   endpoint:
     health:
-      show-details: always
+      show-details: never
   metrics:
     tags:
       application: ${spring.application.name}
