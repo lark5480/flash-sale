@@ -72,7 +72,7 @@
         <!-- Sale Grid -->
         <div v-else class="sale-grid">
           <div
-            v-for="sale in sales"
+            v-for="sale in saleCards"
             :key="sale.id"
             class="sale-card"
             @click="goToDetail(sale.id)"
@@ -88,7 +88,7 @@
                 </svg>
               </div>
               <div class="image-shine"></div>
-              <span v-if="isUrgent(sale)" class="urgent-badge">即将结束</span>
+              <span v-if="sale.countdown.urgency !== 'normal'" class="urgent-badge">即将结束</span>
             </div>
             <div class="card-body">
               <h3 class="item-name">{{ sale.itemName || '商品 #' + sale.itemId }}</h3>
@@ -111,12 +111,16 @@
                 </span>
               </div>
 
-              <div class="countdown" :class="{ urgent: isUrgent(sale) }">
+              <div class="countdown" :class="`countdown--${sale.countdown.urgency}`">
                 <svg class="clock-icon" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                   <circle cx="12" cy="12" r="10"/>
                   <path d="M12 6v6l4 2"/>
                 </svg>
-                <span class="countdown-digits">{{ countdown(sale) }}</span>
+                <span v-if="!sale.countdown.ended" class="countdown-label">{{ sale.countdown.label }}</span>
+                <span class="countdown-digits">
+                  <template v-if="sale.countdown.ended">{{ sale.countdown.text }}</template>
+                  <template v-else><b v-if="sale.countdown.days" class="countdown-days">{{ sale.countdown.days }}天</b>{{ sale.countdown.hms }}</template>
+                </span>
               </div>
             </div>
           </div>
@@ -127,16 +131,21 @@
 </template>
 
 <script setup>
-import { ref, onMounted, onUnmounted } from 'vue'
+import { ref, computed, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { getActiveFlashSales } from '../api/flash-sale'
+import { getSaleCountdown, useNow } from '../utils/countdown'
 
 const router = useRouter()
 const sales = ref([])
 const loading = ref(true)
 const error = ref('')
-const tick = ref(0)
-let timer = null
+const now = useNow()
+
+/** 列表数据 + 实时倒计时信息（随共享时钟每秒重算，供卡片直接渲染） */
+const saleCards = computed(() =>
+  sales.value.map((sale) => ({ ...sale, countdown: getSaleCountdown(sale, now.value) }))
+)
 
 async function fetchSales() {
   loading.value = true
@@ -149,27 +158,6 @@ async function fetchSales() {
   } finally {
     loading.value = false
   }
-}
-
-function countdown(sale) {
-  if (!sale.endTime) return '--:--:--'
-  tick.value
-  const now = Date.now()
-  const end = new Date(sale.endTime).getTime()
-  const diff = Math.max(0, end - now)
-  if (diff <= 0) return '已结束'
-  const h = Math.floor(diff / 3600000)
-  const m = Math.floor((diff % 3600000) / 60000)
-  const s = Math.floor((diff % 60000) / 1000)
-  return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`
-}
-
-function isUrgent(sale) {
-  if (!sale.endTime) return false
-  tick.value
-  const now = Date.now()
-  const end = new Date(sale.endTime).getTime()
-  return end - now > 0 && end - now < 3600000
 }
 
 function stockPercent(sale) {
@@ -190,11 +178,6 @@ function handleLogout() {
 
 onMounted(() => {
   fetchSales()
-  timer = setInterval(() => { tick.value++ }, 1000)
-})
-
-onUnmounted(() => {
-  if (timer) { clearInterval(timer); timer = null }
 })
 </script>
 
@@ -535,25 +518,58 @@ onUnmounted(() => {
   background: rgba(255, 255, 255, 0.03);
   border-radius: var(--radius-sm);
   border: 1px solid rgba(255, 255, 255, 0.04);
+  transition: all var(--transition-fast);
 }
-.countdown.urgent {
-  background: rgba(231, 76, 60, 0.08);
-  border-color: rgba(231, 76, 60, 0.15);
-}
-.clock-icon {
+.countdown-label {
   flex-shrink: 0;
+  font-size: 11px;
   color: var(--color-text-muted);
-}
-.countdown.urgent .clock-icon {
-  color: var(--color-danger);
 }
 .countdown-digits {
   font-family: var(--font-mono);
   font-size: 13px;
   font-weight: 600;
   color: var(--color-text-secondary);
+  white-space: nowrap;
 }
-.countdown.urgent .countdown-digits {
+/* 天数单独强调，避免被误读为小时（如 47:12:30） */
+.countdown-days {
+  margin-right: 3px;
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--color-text);
+}
+.clock-icon {
+  flex-shrink: 0;
+  color: var(--color-text-muted);
+}
+
+/* 剩余 < 1 小时 */
+.countdown--soon {
+  background: rgba(231, 76, 60, 0.08);
+  border-color: rgba(231, 76, 60, 0.15);
+}
+.countdown--soon .clock-icon,
+.countdown--soon .countdown-digits,
+.countdown--soon .countdown-days {
   color: var(--color-danger);
+}
+
+/* 剩余 < 5 分钟 */
+.countdown--critical {
+  background: rgba(231, 76, 60, 0.12);
+  border-color: rgba(231, 76, 60, 0.3);
+}
+.countdown--critical .clock-icon,
+.countdown--critical .countdown-digits,
+.countdown--critical .countdown-days {
+  color: var(--color-danger);
+}
+.countdown--critical .countdown-digits {
+  animation: countdown-pulse 1s ease-in-out infinite;
+}
+@keyframes countdown-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.5; }
 }
 </style>

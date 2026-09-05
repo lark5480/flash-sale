@@ -54,8 +54,11 @@
               <span class="info-value" :class="{ 'text-danger': sale.stock < 10 }">{{ sale.stock }}</span>
             </div>
             <div class="info-item">
-              <span class="info-label">剩余时间</span>
-              <span class="info-value time-value" :class="{ urgent: isUrgent }">{{ countdownText }}</span>
+              <span class="info-label">{{ countdownLabel }}</span>
+              <span
+                class="info-value time-value"
+                :class="{ urgent: isUrgent, critical: countdown.urgency === 'critical' }"
+              >{{ countdownText }}</span>
             </div>
           </div>
 
@@ -124,12 +127,14 @@
 </template>
 
 <script setup>
-import { ref, computed, onMounted, onUnmounted } from 'vue'
+import { ref, computed, onMounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { getFlashSaleDetail, purchase } from '../api/flash-sale'
 import { getItemDetail } from '../api/item'
 import { getOrderStatus } from '../api/order'
 import { useToast } from '../composables/useToast'
+import { getSaleCountdown, useNow, URGENCY } from '../utils/countdown'
+import { parseTime } from '../utils/time'
 
 const route = useRoute()
 const router = useRouter()
@@ -140,8 +145,7 @@ const item = ref({})
 const loading = ref(true)
 const loadError = ref('')
 const purchasing = ref(false)
-const tick = ref(0)
-let timer = null
+const now = useNow()
 
 const captchaId = ref('')
 const captchaSvg = ref('')
@@ -160,11 +164,12 @@ async function refreshCaptcha() {
 
 const flashSaleStatus = computed(() => {
   if (!sale.value) return ''
-  const now = Date.now()
-  const start = new Date(sale.value.startTime).getTime()
-  const end = new Date(sale.value.endTime).getTime()
-  if (now < start) return 'upcoming'
-  if (now > end) return 'ended'
+  // 依赖共享时钟，活动开始 / 结束时状态会自动切换到可抢购 / 已结束
+  const current = now.value
+  const start = parseTime(sale.value.startTime)
+  const end = parseTime(sale.value.endTime)
+  if (!Number.isNaN(start) && current < start) return 'upcoming'
+  if (!Number.isNaN(end) && current > end) return 'ended'
   if (sale.value.stock <= 0) return 'soldout'
   return 'active'
 })
@@ -176,26 +181,16 @@ const statusText = computed(() => {
 
 const statusClass = computed(() => 'status-' + flashSaleStatus.value)
 
-const isUrgent = computed(() => {
-  if (!sale.value?.endTime) return false
-  const now = Date.now()
-  const end = new Date(sale.value.endTime).getTime()
-  const diff = end - now
-  return diff > 0 && diff < 3600000
-})
+/** 未开始时倒计时到开始时间，进行中倒计时到结束时间 */
+const countdown = computed(() => getSaleCountdown(sale.value, now.value))
 
-const countdownText = computed(() => {
-  if (!sale.value?.endTime) return '--:--:--'
-  tick.value
-  const now = Date.now()
-  const end = new Date(sale.value.endTime).getTime()
-  const diff = Math.max(0, end - now)
-  if (diff <= 0) return '已结束'
-  const h = Math.floor(diff / 3600000)
-  const m = Math.floor((diff % 3600000) / 60000)
-  const s = Math.floor((diff % 60000) / 1000)
-  return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`
-})
+const countdownLabel = computed(() =>
+  countdown.value.ended ? '活动状态' : countdown.value.label
+)
+
+const countdownText = computed(() => countdown.value.text)
+
+const isUrgent = computed(() => countdown.value.urgency !== URGENCY.NORMAL)
 
 const stockPercent = computed(() => {
   if (!sale.value?.stock) return 0
@@ -247,12 +242,18 @@ async function handlePurchase() {
 
     // Poll for order creation (max 20 attempts, ~10s)
     let confirmed = false
+    let failed = false
     for (let i = 0; i < 20; i++) {
       await new Promise(r => setTimeout(r, 500))
       try {
         const statusRes = await getOrderStatus(messageKey)
-        if (statusRes.data?.status === 'DONE') {
+        const status = statusRes.data?.status
+        if (status === 'DONE') {
           confirmed = true
+          break
+        }
+        if (status === 'FAILED') {
+          failed = true
           break
         }
       } catch (e) {
@@ -262,10 +263,14 @@ async function handlePurchase() {
 
     if (confirmed) {
       toast.success('订单已创建，正在跳转...')
+      router.push('/orders')
+    } else if (failed) {
+      toast.error('抢购未成功，库存已耗尽或活动已结束')
+      refreshCaptcha()
     } else {
       toast.success('抢购请求已提交，请稍后查看订单')
+      router.push('/orders')
     }
-    router.push('/orders')
   } catch (e) {
     toast.error(e.response?.data?.msg || e.message || '抢购失败')
     refreshCaptcha()
@@ -281,16 +286,6 @@ function goBack() {
 onMounted(() => {
   fetchData()
   refreshCaptcha()
-  timer = setInterval(() => {
-    tick.value++
-  }, 1000)
-})
-
-onUnmounted(() => {
-  if (timer) {
-    clearInterval(timer)
-    timer = null
-  }
 })
 </script>
 
@@ -439,8 +434,13 @@ onUnmounted(() => {
 .info-label { font-size: 11px; color: var(--color-text-muted); font-weight: 500; text-transform: uppercase; letter-spacing: 0.5px; }
 .info-value { font-size: 15px; font-weight: 600; color: var(--color-text); }
 .info-value.text-danger { color: var(--color-danger); }
-.time-value { font-family: var(--font-mono); font-size: 14px; }
+.time-value { font-family: var(--font-mono); font-size: 14px; white-space: nowrap; }
 .time-value.urgent { color: var(--color-danger); }
+.time-value.critical { color: var(--color-danger); animation: countdown-pulse 1s ease-in-out infinite; }
+@keyframes countdown-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.5; }
+}
 .status-active { color: #4ADE80; }
 .status-upcoming { color: var(--color-warning); }
 .status-ended, .status-soldout { color: var(--color-text-muted); }
