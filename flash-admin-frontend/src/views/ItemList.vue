@@ -34,6 +34,19 @@
 
     <el-table :data="filteredItems" stripe border style="width: 100%" v-loading="loading">
       <el-table-column prop="id" label="ID" width="80" />
+      <el-table-column label="图片" width="110" align="center">
+        <template #default="{ row }">
+          <img
+            class="thumb-img"
+            :src="thumbSrc(row)"
+            :alt="row.name"
+            :data-seed="itemSeed(row.id, row.name)"
+            :title="row.image || '自动占位图'"
+            loading="lazy"
+            @error="onImgError"
+          />
+        </template>
+      </el-table-column>
       <el-table-column prop="name" label="商品名称" min-width="150" />
       <el-table-column prop="price" label="价格" width="120">
         <template #default="{ row }">
@@ -47,10 +60,36 @@
           </el-tag>
         </template>
       </el-table-column>
-      <el-table-column label="操作" width="180" fixed="right">
+      <el-table-column label="操作" width="220" fixed="right">
         <template #default="{ row }">
-          <el-button size="small" type="primary" link @click="openEditDialog(row)">编辑</el-button>
-          <el-button size="small" type="danger" link @click="handleDelete(row)">删除</el-button>
+          <el-button
+            size="small"
+            type="primary"
+            link
+            :disabled="row.status === 1"
+            :title="row.status === 1 ? '上架商品不可编辑，请先下架' : ''"
+            @click="openEditDialog(row)"
+          >
+            编辑
+          </el-button>
+          <el-button
+            size="small"
+            :type="row.status === 1 ? 'warning' : 'success'"
+            link
+            @click="handleStatusChange(row)"
+          >
+            {{ row.status === 1 ? '下架' : '上架' }}
+          </el-button>
+          <el-button
+            size="small"
+            type="danger"
+            link
+            :disabled="row.status === 1"
+            :title="row.status === 1 ? '上架商品不可删除，请先下架' : ''"
+            @click="handleDelete(row)"
+          >
+            删除
+          </el-button>
         </template>
       </el-table-column>
     </el-table>
@@ -71,7 +110,33 @@
           <el-input v-model="form.description" type="textarea" :rows="3" placeholder="选填" />
         </el-form-item>
         <el-form-item label="图片" prop="image">
-          <el-input v-model="form.image" placeholder="选填，图片URL" />
+          <div class="image-picker">
+            <div class="image-preview">
+              <img
+                class="preview-img"
+                :src="previewSrc"
+                :alt="form.name || '商品图'"
+                :data-seed="previewSeed"
+                @error="onImgError"
+              />
+              <span v-if="!form.image" class="preview-tag">自动占位图</span>
+            </div>
+            <div class="image-controls">
+              <el-input
+                v-model="form.image"
+                placeholder="图片 URL：https://… 或 /images/xxx.png（留空自动占位）"
+                clearable
+              />
+              <div class="image-actions">
+                <el-button size="small" @click="applyRandomImage">随机换一张</el-button>
+                <el-button size="small" link type="danger" @click="form.image = ''">清空图片</el-button>
+              </div>
+              <p class="image-hint">
+                可填完整 http(s) 图片地址，或本服务相对路径 /images/xxx.png；留空时商品将使用
+                picsum 稳定占位图（同一商品始终同一张）。
+              </p>
+            </div>
+          </div>
         </el-form-item>
       </el-form>
       <template #footer>
@@ -85,7 +150,8 @@
 <script setup>
 import { ref, computed, onMounted } from 'vue'
 import { Plus, Refresh } from '@element-plus/icons-vue'
-import { getItems, createItem, updateItem, deleteItem } from '../api/item'
+import { getItems, createItem, updateItem, deleteItem, updateItemStatus } from '../api/item'
+import { picsumUrl, itemImageUrl, itemSeed, fallbackToPicsum } from '../utils/image'
 import { ElMessage, ElMessageBox } from 'element-plus'
 
 const items = ref([])
@@ -183,9 +249,50 @@ async function handleSubmit() {
     dialogVisible.value = false
     await fetchItems()
   } catch (e) {
-    ElMessage.error(e.response?.data?.msg || '操作失败')
+    ElMessage.error(e.response?.data?.msg || e.message || '操作失败')
   } finally {
     submitting.value = false
+  }
+}
+
+// ===== 图片预览与占位 =====
+// 新增态用名称、编辑态用 id 作 picsum seed：同一商品占位图始终稳定一致
+const previewSeed = computed(() => itemSeed(editingId.value, form.value.name || 'new-item'))
+const previewSrc = computed(() => itemImageUrl(form.value.image, previewSeed.value))
+
+function thumbSrc(row) {
+  return itemImageUrl(row.image, itemSeed(row.id, row.name))
+}
+
+function onImgError(e) {
+  fallbackToPicsum(e)
+}
+
+let randomSeq = 0
+function applyRandomImage() {
+  randomSeq += 1
+  const base = (form.value.name && form.value.name.trim()) || 'item'
+  const seed = `${base}-r${randomSeq}-${Date.now().toString(36)}`
+  // 填入带唯一 seed 的 picsum URL：保存后即固化为该商品的正式图片
+  form.value.image = picsumUrl(seed, 480)
+}
+
+async function handleStatusChange(row) {
+  const nextStatus = row.status === 1 ? 0 : 1
+  const actionText = nextStatus === 0 ? '下架' : '上架'
+  try {
+    await ElMessageBox.confirm(`确定要${actionText}「${row.name}」吗？`, '确认', {
+      confirmButtonText: actionText,
+      cancelButtonText: '取消',
+      type: 'warning'
+    })
+    await updateItemStatus(row.id, nextStatus)
+    ElMessage.success(`商品已${actionText}`)
+    await fetchItems()
+  } catch (e) {
+    if (e !== 'cancel') {
+      ElMessage.error(e.response?.data?.msg || e.message || `${actionText}商品失败`)
+    }
   }
 }
 
@@ -201,7 +308,7 @@ async function handleDelete(row) {
     await fetchItems()
   } catch (e) {
     if (e !== 'cancel') {
-      ElMessage.error('删除商品失败')
+      ElMessage.error(e.response?.data?.msg || e.message || '删除商品失败')
     }
   }
 }
@@ -245,5 +352,69 @@ onMounted(fetchItems)
   display: flex;
   align-items: center;
   gap: 8px;
+}
+
+/* 列表缩略图 */
+.thumb-img {
+  width: 52px;
+  height: 52px;
+  border-radius: 8px;
+  object-fit: cover;
+  background: rgba(156, 163, 175, 0.08);
+  vertical-align: middle;
+}
+
+/* 表单图片：左预览右控制 */
+.image-picker {
+  display: flex;
+  gap: 16px;
+  width: 100%;
+}
+.image-preview {
+  position: relative;
+  flex-shrink: 0;
+  width: 160px;
+  height: 160px;
+  border-radius: 10px;
+  border: 1px dashed rgba(255, 255, 255, 0.14);
+  background: rgba(156, 163, 175, 0.06);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+}
+.preview-img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+.preview-tag {
+  position: absolute;
+  left: 8px;
+  bottom: 8px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: rgba(0, 0, 0, 0.55);
+  color: #fff;
+  font-size: 12px;
+  pointer-events: none;
+}
+.image-controls {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.image-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.image-hint {
+  margin: 0;
+  color: #9CA3AF;
+  font-size: 12px;
+  line-height: 1.6;
 }
 </style>
