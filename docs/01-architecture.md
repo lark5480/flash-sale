@@ -124,7 +124,7 @@ MyBatis-Plus Mapper 接口。
 - **FlashOrderProducer** — 秒杀下单消息生产者（syncSend 同步发送）
 - **RateLimitInterceptor** — 接口限流拦截器（Redis ZSET 滑动窗口）
 - **CaptchaService** — 算术验证码服务（生成 + 校验，Redis 存储，一次性消费）
-- **FlashOrderConsumer** — 秒杀下单消息消费者（三重幂等 + 分布式锁 + 事务扣库存+创建订单，BusinessException 吞没、系统异常 re-throw）
+- **FlashOrderConsumer** — 秒杀下单消息消费者（终态标记 SETNX + DB messageKey 幂等 + Redisson 锁 + 事务扣库存+创建订单；业务终态失败吞没不重试、系统异常 re-throw 交给 MQ 重试，重试耗尽由 FlashOrderDeadLetterConsumer 补写 FAILED）
 
 ### flash-api（用户端 API，端口 8081）
 
@@ -151,7 +151,7 @@ MyBatis-Plus Mapper 接口。
 
 基于 Spring Cloud Gateway 的统一入口。
 
-- `AuthGlobalFilter` — JWT 鉴权过滤器，校验通过后向下游透传 `X-User-Id` 和 `X-User-Role` 请求头
+- `AuthGlobalFilter` — JWT 鉴权过滤器（白名单放行 + 校验 Token；请求进入网关即**统一剥离**客户端自带的 `X-User-Id`/`X-User-Role` 头，鉴权通过后才按 JWT 中的真实身份**重写**这两个头。该头不是信任边界，鉴权与归属判断仍一律以下游重解析的 Token 为准）
 - CORS 跨域配置
 - 路由规则：
   - `/api/**` → `flash-api`（lb://flash-api）
@@ -177,7 +177,7 @@ sequenceDiagram
 
     C->>GW: POST /api/flash-sale/{id}/purchase
     GW->>GW: AuthGlobalFilter 校验 JWT
-    GW->>API: 转发请求 (X-User-Id, X-User-Role)
+    GW->>API: 转发请求 (Authorization + X-User-Id/X-User-Role)
     API->>Svc: purchase(flashSaleId, userId)
 
     Note over Svc,DB: Step 1: 活动校验
@@ -185,16 +185,17 @@ sequenceDiagram
     DB-->>Svc: 返回活动数据
     Svc->>Svc: 校验：状态=ACTIVE，当前时间在 startTime~endTime 范围内
 
-    Note over Svc,Redis: Step 2: 库存预热
-    Svc->>Redis: GET flash:stock:{flashSaleId}
-    alt Redis 中无库存 Key
-        Svc->>DB: 查询活动库存
-        Svc->>Redis: SET flash:stock:{flashSaleId} = stock
+    Note over Svc,Redis: Step 2: 库存状态键就绪（仅缺失时补建）
+    Svc->>Redis: EXISTS flash:stock:{flashSaleId}
+    alt 库存 Key 不存在
+        Svc->>Redis: GET flash:inflight:{flashSaleId}
+        Svc->>Redis: SETNX flash:stock:{flashSaleId} = DB stock - 在途
+        Note right of Redis: 键已存在时绝不覆盖：<br/>它是业务状态不是缓存
     end
 
     Note over Svc,Redis: Step 3: Lua 原子扣减
-    Svc->>Redis: EVAL Lua 脚本
-    Note right of Redis: 原子操作：<br/>1. 检查用户购买次数是否超限<br/>2. 检查库存是否 > 0<br/>3. DECR stock<br/>4. INCR user:purchased 计数
+    Svc->>Redis: EVAL stock_deduct.lua (KEYS: stock / user:purchased / inflight)
+    Note right of Redis: 原子操作：<br/>1. 检查用户购买次数是否超限<br/>2. 检查库存是否 > 0（Key 缺失即售罄）<br/>3. DECR stock<br/>4. INCR user:purchased 计数<br/>5. INCR inflight 在途计数
     Redis-->>Svc: 返回扣减结果
 
     alt 扣减失败（库存不足 / 超限购）
@@ -206,36 +207,48 @@ sequenceDiagram
     Svc->>Svc: 生成 messageKey (UUID)
     Svc->>MQ: syncSend(topic, messageKey, payload)
     MQ-->>Svc: 发送成功
+    alt 发送失败
+        Svc->>Redis: EVAL stock_restore.lua mode=1（库存+1 限购-1 在途-1）
+        Svc-->>API: 抛出下单失败
+    end
 
     Svc-->>API: 返回 messageKey
     API-->>C: 返回 messageKey（客户端开始轮询）
 
     Note over Consumer,DB: Step 5: 异步消费（削峰）
     MQ->>Consumer: 推送消息
-    Consumer->>Redis: SETNX flash:msg:processed:{messageKey} (幂等校验)
-    alt 已处理过
-        Consumer-->>MQ: ACK（跳过）
+    Consumer->>Redis: GET flash:msg:result:{messageKey} (终态判定)
+    alt 已是 DONE / FAILED
+        Consumer-->>MQ: ACK（跳过，收敛已由写入标记的那次投递完成）
     end
-    Consumer->>Redis: Redisson tryLock(flash:lock:{flashSaleId})
-    Consumer->>DB: deductStock (乐观锁: stock >= quantity)
+    Consumer->>DB: selectByMessageKey（标记过期时的幂等兜底）
+    alt 订单已存在
+        Consumer->>Redis: SETNX result = DONE（只补标记，不再递减在途）
+        Consumer-->>MQ: ACK
+    end
+    Consumer->>Redis: Redisson lock(flash:lock:{flashSaleId}, 10s)
+    Consumer->>DB: 限购兜底 COUNT（status NOT IN 已取消/已退款）
+    Consumer->>DB: deductStock (乐观锁: stock > 0)
     Consumer->>DB: INSERT flash_order
-    Consumer->>Redis: SET flash:msg:processed:{messageKey} = DONE
+    Consumer->>Redis: SETNX result = DONE，成功则 DECR flash:inflight
     Consumer-->>MQ: ACK
+    Note over Consumer,Redis: 业务异常(售罄/超限购) → SETNX result = FAILED + 递减在途，且不重试<br/>系统异常 → 不写标记，抛出交给 RocketMQ 重试<br/>重试耗尽 → 死信消费者同样走 SETNX + 递减在途
 
     Note over C,Redis: Step 6: 客户端轮询结果
-    loop 轮询直到 DONE 或超时
-        C->>API: GET /api/order/status/{messageKey}
-        API->>Redis: GET flash:msg:processed:{messageKey}
+    loop 轮询直到 DONE / FAILED 或超时
+        C->>API: GET /api/order/status?messageKey=
+        API->>Redis: GET flash:msg:result:{messageKey}
         API-->>C: 返回状态（PROCESSING / DONE / FAILED）
     end
 ```
 
 **关键设计要点：**
 
-1. **Lua 脚本保证原子性** — 库存扣减和用户购买计数在单次 Redis 调用中原子完成，避免竞态条件。
+1. **Lua 脚本保证原子性** — 库存扣减、用户购买计数与在途计数在单次 Redis 调用中原子完成，避免竞态条件。
 2. **同步发送 + 异步消费** — `syncSend` 确保消息到达 Broker，消费者异步处理实现削峰。
 3. **messageKey 轮询机制** — 客户端拿到 messageKey 后轮询 Redis 中的处理状态，实现异步转同步的用户体验。
-4. **三重幂等保障** — Redis SETNX（消息级）+ Redisson 分布式锁（并发级）+ DB 乐观锁（数据级）。
+4. **多重幂等保障** — Redis 终态标记 SETNX（消息级）→ DB messageKey 查询（标记过期后兜底）→ `message_key` UNIQUE 索引（并发级）→ Redisson 分布式锁 + DB 乐观锁（数据级）。
+5. **库存键是业务状态，不是缓存** — `flash:stock:{id}` 只由 `FlashStockState` 读写：缺失时按 `DB stock − flash:inflight:{id}` 用 SETNX 补建，已存在时任何路径（含管理端更新、缓存失效）都不得覆盖或删除。**唯一例外是管理端把非活跃场次重新激活**：上一周期的键仍持有旧 DB stock 算出的值，若直接沿用则停售期间调大的库存永不生效，因此激活前先删除旧键，再由 `warmUpRedis` 按新 `DB stock − 在途` 重建（非活跃状态无购买流量，删除是安全的）。在途计数由预扣 Lua `+1`、由终态标记的 SETNX 胜出者 `-1`，保证每笔预扣恰好收敛一次；多减会放出虚假库存（超卖方向），少减只会保守地少卖。
 
 ---
 
@@ -246,8 +259,9 @@ sequenceDiagram
 ### FlashSaleScheduler — 活动状态流转
 
 - **频率**：每 60 秒执行一次
-- **PENDING → ACTIVE**：`startTime <= 当前时间` 的活动，更新状态为 ACTIVE，并触发 Redis 库存预热（将 DB 库存写入 Redis）
+- **PENDING → ACTIVE**：`startTime <= 当前时间` 的活动，更新状态为 ACTIVE，并确保 Redis 库存状态键就绪 —— 键不存在时按 `DB stock − 在途` 用 SETNX 补建，已存在则完全不覆盖
 - **ACTIVE → ENDED**：`endTime <= 当前时间` 的活动，更新状态为 ENDED
+- ⚠️ 两个 `@Scheduled` 方法均无分布式锁，多实例部署时会重复执行（`OrderScheduler` 的重复归还尤其需要关注）
 
 ### OrderScheduler — 超时订单取消
 
@@ -255,8 +269,9 @@ sequenceDiagram
 - 查询状态为 PENDING 且创建时间超过 15 分钟的订单
 - 将这些订单状态更新为 CANCELLED
 - 回滚数据库库存（`restoreStock`）
-- 回滚 Redis 库存（`INCR flash:stock:{flashSaleId}`）
-- 清除 Redis 用户购买记录
+- 回滚 Redis 状态：单次 `stock_restore.lua` mode=0 调用同时完成库存 +1 与限购计数 −1，且只对已存在的键生效（避免为早已结束的场次建出无 TTL 的脏键）
+- 归还脚本的 Redis 异常被 `FlashStockState.apply()` 吞掉，因此上面那个 `@Transactional` 照常提交：
+  最坏情况是 DB 已归还、Redis 少归还一次，只会保守地少卖；让异常向外抛反而会把用户的取消动作整体回滚掉
 
 ---
 
@@ -277,17 +292,22 @@ sequenceDiagram
 
 | Key 格式 | 用途 | TTL |
 |----------|------|-----|
-| `flash:stock:{flashSaleId}` | 秒杀库存计数器（Lua 脚本原子操作） | 3600s ± 300s |
+| `flash:stock:{flashSaleId}` | 秒杀库存计数器（Lua 脚本原子操作，**业务状态非缓存**） | `stockTtlSeconds` = 剩余场次 + 86400s |
+| `flash:inflight:{flashSaleId}` | 在途预扣计数：Redis 已扣、DB 未落库的量，DB 重建库存键时的校正依据 | `stockTtlSeconds` = 剩余场次 + 86400s |
+| `flash:user:purchased:{flashSaleId}:{userId}` | 用户购买次数计数，防止超限购（DB 另有 `countQuotaOccupied` 兜底） | `stockTtlSeconds` = 剩余场次 + 86400s |
 | `flash:sale:{flashSaleId}` | 活动详情缓存，减少 DB 查询 | 3600s ± 300s |
-| `flash:user:purchased:{flashSaleId}:{userId}` | 用户购买次数计数，防止超限购 | 3600s ± 300s |
 | `flash:lock:{flashSaleId}` | Redisson 分布式锁，保证消费者同一活动串行处理库存 | 锁自动续期（watchdog） |
-| `flash:msg:processed:{messageKey}` | MQ 消息幂等标记（SETNX 写入） | `MSG_PROCESSED_TTL` |
+| `flash:msg:result:{messageKey}` | MQ 消息处理结果标记，值为 DONE/FAILED，仅在业务终态后由 SETNX 写入 | `MSG_RESULT_TTL`（3600s） |
 | `rate:limit:{key}:{userId\|ip:xxx}` | 接口限流滑动窗口（ZSET） | window + 1s |
-| `flash:captcha:{captchaId}` | 算术验证码答案 | 180s |
-| `active:list` | 进行中的秒杀活动列表缓存（L2） | 3600s ± 300s |
-| `item:{itemId}` | 商品详情缓存（L2） | 3600s ± 300s |
+| `captcha:{captchaId}` | 算术验证码答案 | `CAPTCHA_TTL`（300s） |
+| `active:list` | 进行中的秒杀活动列表缓存（L2） | `randomTtl(30)` = 30s ± 300s |
+| `item:{itemId}` | 商品详情缓存（L2） | `randomTtl(86400)` = 86400s ± 300s |
 
-> 注：所有 TTL 均使用 `randomTtl()` 方法添加 ±300s 随机偏移，防止缓存雪崩
+> 注：`randomTtl()`（±300s 防雪崩）只用于纯缓存键。库存 / 限购 / 在途三个状态键的 TTL 由场次结束时间决定并额外保留 1 天宽限期 ——
+> 固定 TTL 会让跨小时的场次在进行中自然过期，之后只能拿滞后的 DB 值重建，从而放出虚假库存。
+> `flash:msg:result` 的 3600s 短于状态键生命周期，因此消费者侧仍保留 DB messageKey 幂等查询作为标记过期后的兜底。
+> ⚠️ 已知缺陷：`randomTtl()` 的偏移固定为 ±300s，`active:list` 用 `randomTtl(30)` 时负偏移会被钳到 1s，
+> 约一半的写入只能得到 1s TTL，等于这一层 L2 缓存在大部分时间不生效。偏移量应按基数的比例取值。
 
 ---
 
@@ -311,22 +331,17 @@ sequenceDiagram
 
 **其他所有路径**均需在请求头中携带 `Authorization: Bearer <accessToken>`。
 
-### 身份信息透传
+### 身份信息传递
 
-Gateway 校验 Token 通过后，从 JWT payload 中提取 `userId` 和 `role`，注入为 HTTP 请求头传递给下游服务：
+Gateway 校验 Token 通过后，从 JWT payload 中提取 `userId` 和 `role`，重写为 HTTP 请求头（`X-User-Id` / `X-User-Role`）转发给下游。
 
-```
-X-User-Id: 10001
-X-User-Role: USER
-```
-
-下游 Controller 通过 `@RequestHeader("X-User-Id")` 获取当前用户标识，无需重复解析 Token。
+**⚠️ 该头不是信任边界**：客户端可以自带同名的 `X-User-Id` 请求头，但 `AuthGlobalFilter` 会对**所有**进入网关的请求先统一剥离再重写（放行的公开路径干脆不携带），因此下游看到的这两个头一定由网关写入。即便如此，下游仍不读取该头——每个服务的 `JwtAuthenticationFilter` 都会重新解析 `Authorization` 头中的 Token，以 JWT 中的 `userId` 作为 `Authentication` 的 principal；Controller 通过方法参数 `Authentication`（`auth.getPrincipal()`）获取当前用户。任何涉及归属/越权的判断都必须基于 Token 解析结果，禁止用 `X-User-Id` 请求头取值。
 
 ### 验证码机制
 
 登录和秒杀下单需验证码校验（`CaptchaService`）：
 
-- **生成**：随机算术题（a + b / a - b / a × b），答案存入 Redis `flash:captcha:{uuid}`，TTL 180s
+- **生成**：随机算术题（a + b / a - b / a × b），答案存入 Redis `captcha:{uuid}`，TTL 300s（`RedisConstants.CAPTCHA_KEY` / `CAPTCHA_TTL`）
 - **校验**：比对用户输入与 Redis 中的答案，**无论对错都删除 key**（一次性消费）
 - **端点**：`GET /api/auth/captcha`、`GET /admin/auth/captcha`
 
@@ -496,7 +511,7 @@ docker/grafana/
 |------|------|------|
 | Grafana 面板 "No data" | Prometheus Targets DOWN / 指标不存在 / 时间范围不对 | 按顺序排查：targets → graph → actuator → 时间范围 |
 | P99 面板 "No data" | 缺少 `_bucket` 指标 | 配 `percentiles-histogram: true` |
-| Prometheus 拉不到本地应用 | 容器内 localhost 指向容器自身 | Prometheus targets 使用容器名（api:8081, admin:8082），本地开发需手动改为 host.docker.internal |
+| Prometheus 拉不到本地应用 | 容器内 localhost 指向容器自身 | targets 默认已指向 host.docker.internal:8081/8082（宿主机模式）；后端全容器部署时改回容器名 api:8081, admin:8082 |
 | Grafana "Failed to upgrade legacy queries" | Dashboard JSON 用旧 `rows` 格式 | 重写为扁平 `panels` 格式 |
 | Sentinel 规则重启丢失 | 默认内存存储 | 生产环境接 Nacos 持久化 |
 

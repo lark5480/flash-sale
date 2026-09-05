@@ -193,8 +193,8 @@ com.flashsale
 | GET | `/api/flash-sale/active` | 当前进行中的秒杀活动列表 | 是 |
 | GET | `/api/flash-sale/{id}` | 秒杀活动详情（含关联商品信息） | 是 |
 | POST | `/api/flash-sale/{id}/purchase` | 秒杀下单（需验证码），返回 messageKey | 是 |
-| GET | `/api/order/status?messageKey=` | 轮询订单异步处理状态（PROCESSING / DONE） | 是 |
-| GET | `/api/order/list?page=1&size=10` | 我的订单列表（分页） | 是 |
+| GET | `/api/order/status?messageKey=` | 轮询订单异步处理状态（PROCESSING / DONE / FAILED） | 是 |
+| GET | `/api/order/list?page=1&size=10&status=&keyword=` | 我的订单列表（分页，支持状态筛选与订单号/商品名称搜索） | 是 |
 | GET | `/api/order/{id}` | 订单详情 | 是 |
 | POST | `/api/order/{id}/pay` | 支付订单 | 是 |
 | POST | `/api/order/{id}/cancel` | 取消订单 | 是 |
@@ -204,11 +204,13 @@ com.flashsale
 **秒杀下单流程：**
 
 1. 客户端调用 `POST /api/flash-sale/{id}/purchase`
-2. 服务端执行 Redis Lua 脚本进行库存预扣和限购校验
+2. 服务端确保 Redis 库存状态键就绪（缺失时按 `DB stock − 在途` 用 SETNX 补建，已存在完全不覆盖），
+   再执行 Redis Lua 脚本进行库存预扣和限购校验
 3. 预扣成功后，通过 RocketMQ 发送异步下单消息
 4. 立即返回 `messageKey` 给客户端
 5. 客户端使用 `messageKey` 轮询 `GET /api/order/status` 获取订单创建结果
-6. 消费者异步处理：幂等校验 -> 分布式锁 -> DB 乐观锁扣库存 -> 创建订单
+6. 消费者异步处理：幂等校验 -> 分布式锁 -> 限购 DB 兜底 -> DB 乐观锁扣库存 -> 创建订单
+   -> 写终态标记并收敛在途计数
 
 ### 3.2 管理端 API
 
@@ -237,18 +239,25 @@ com.flashsale
 | GET | `/admin/user/list?page=1&size=10` | 用户列表 |
 | PUT | `/admin/user/{id}/status` | 启用/禁用用户 |
 
+> ⚠️ `PUT /admin/flash-sale` 对**进行中（ACTIVE）**的活动拒绝修改 `stock`，返回 `BAD_REQUEST`。
+> 该列既是总量也是台账，而后台表单提交的是打开页面那一刻的快照值，全量 `updateById` 会把它写回旧值或更大值，
+> 等于凭空放出已卖出的库存。需要补库存时走「结束活动 → 改库存 → 重新激活」——
+> 重新激活时服务端会先删除上一周期遗留的旧库存键，再按新 `DB stock − 在途` 重建
+> （键已存在时 `ensureStockKey` 会跳过重建，不先删键则补货永不生效）。其他字段在进行中可正常修改。
+> admin 前端在活动进行中会把「库存」输入置灰并从提交体里剥离该字段，避免旧快照值误触发拦截。
+
 ### 3.3 认证机制
 
 **Gateway 层鉴权（`AuthGlobalFilter`）：**
 
 - 以下路径跳过鉴权：`/api/auth/register`、`/api/auth/login`、`/api/auth/refresh`、`/admin/auth/login`
 - 其他路径必须在 `Authorization` 请求头中携带 `Bearer {token}`
-- Token 校验通过后，将 `X-User-Id` 和 `X-User-Role` 注入到下游请求头中
+- 请求进入网关即统一剥离客户端自带的 `X-User-Id`/`X-User-Role` 请求头，Token 校验通过后再按 JWT 中的身份重写这两个头（仅辅助信息，非信任边界，见下方说明）
 
 **Service 层认证（`JwtAuthenticationFilter`）：**
 
-- 基于 Spring Security 的认证过滤器
-- 从 `X-User-Id` 请求头中提取用户 ID，构建 `Authentication` 对象供 Controller 使用
+- 基于 Spring Security 的认证过滤器，重新解析 `Authorization` 头中的 Token，构建 `Authentication` 对象（principal = JWT 中的 `userId`）
+- Controller 通过方法参数 `Authentication`（`auth.getPrincipal()`）获取当前用户，**不从 `X-User-Id` 请求头取值**——该头可被客户端伪造，不是信任边界
 
 **JWT 配置：**
 
@@ -363,20 +372,22 @@ PENDING_PAYMENT(0) ──→ PAID(1) ──→ REFUNDED(3)
 
 **参数说明：**
 
-| 参数 | 含义 | 示例 |
+| 参数 | 含义 | 取值 |
 |------|------|------|
 | KEYS[1] | 库存 Key | `flash:stock:{flashSaleId}` |
 | KEYS[2] | 用户已购计数 Key | `flash:user:purchased:{flashSaleId}:{userId}` |
-| ARGV[1] | 每人限购数量 | `1` |
-| ARGV[2] | 用户购买记录的 TTL（秒） | `3600` |
+| KEYS[3] | 在途预扣计数 Key | `flash:inflight:{flashSaleId}` |
+| ARGV[1] | 每人限购数量 | `flash_sale.limit_per_user` |
+| ARGV[2] | 已购计数 TTL（秒） | `RedisConstants.stockTtlSeconds(endTime)` |
+| ARGV[3] | 在途计数 TTL（秒） | `RedisConstants.stockTtlSeconds(endTime)` |
 
 **返回值：**
 
 | 返回值 | 含义 |
 |--------|------|
-| `1` | 购买成功：库存 -1，用户计数 +1 |
+| `1` | 购买成功：库存 -1，用户计数 +1，在途计数 +1 |
 | `0` | 超过用户限购次数 |
-| `-1` | 库存不足（已售罄） |
+| `-1` | 库存不足（已售罄）**或库存 Key 不存在** |
 
 **执行逻辑：**
 
@@ -387,43 +398,77 @@ if purchased >= tonumber(ARGV[1]) then
     return 0
 end
 
--- 2. 检查库存是否充足
+-- 2. 检查库存是否充足（Key 缺失按售罄处理，禁止在此脚本内回源 DB）
 local stock = tonumber(redis.call('GET', KEYS[1]) or '-1')
 if stock <= 0 then
     return -1
 end
 
--- 3. 原子操作：扣库存 + 记录用户购买 + 设置过期
+-- 3. 原子操作：扣库存 + 记录用户购买 + 累加在途预扣
 redis.call('DECR', KEYS[1])
-redis.call('INCR', KEYS[2])
-redis.call('EXPIRE', KEYS[2], ARGV[2])
+
+-- TTL 只在首次购买时设置：每次重设会让计数键随购买滑动
+local count = redis.call('INCR', KEYS[2])
+if count == 1 then
+    redis.call('EXPIRE', KEYS[2], ARGV[2])
+end
+
+-- 在途 = 已从 Redis 预扣但 DB 尚未落库的量，是 DB 重建库存的校正依据
+local inflight = redis.call('INCR', KEYS[3])
+if inflight == 1 then
+    redis.call('EXPIRE', KEYS[3], ARGV[3])
+end
 
 return 1
 ```
 
+> 库存 Key 缺失时脚本直接返回 `-1` 而不回源 DB：回源逻辑留在 Java 侧的
+> `FlashStockState.ensureStockKey()`，它按 `DB stock − 在途` 用 `SETNX` 补建，键已存在时完全不覆盖。
+
+### 库存归还脚本（`stock_restore.lua`）
+
+与预扣反向，同一个脚本按 `ARGV[1]` 的 mode 区分三种语义：
+
+| mode | 场景 | 库存 | 已购计数 | 在途计数 |
+|------|------|------|----------|----------|
+| `1` | MQ 发送失败，回滚本次预扣 | +1 | -1 | -1 |
+| `0` | 超时取消 / 退款，归还已落库订单 | +1 | -1 | 不变 |
+| `2` | 消费者到达业务终态，只收敛在途计数 | 不变 | 不变 | -1 |
+
+**关键约束：只对「已存在」的 Key 生效。** 裸 `INCR`/`DECR` 会为早已结束的场次建出无 TTL 的脏键，
+库存键还会被凭空 +1，下一次场次误读到这个脏值。返回值为实际改动的键数量，`0` 表示本场状态键已全部过期。
+
 ### MQ 发送失败必须回滚 Redis
 
-Lua 脚本执行成功后 Redis 状态已变更（库存 -1，用户计数 +1），如果后续 RocketMQ 同步发送失败，**必须回滚 Redis**，否则库存将永久丢失：
+Lua 预扣成功后 Redis 状态已变更（库存 -1、已购 +1、在途 +1），如果后续 RocketMQ 同步发送失败，
+**必须回滚**，否则这部分库存既落不到 DB 也回不到 Redis：
 
-- **回滚操作**：`INCR stock` + `DECR userCount`
-- **更好做法**：回滚也封装为 Lua 脚本，保证回滚本身原子。如果回滚中途 Redis 宕机，仍可能出现数据不一致
+- **回滚实现**：`FlashOrderServiceImpl` 捕获发送异常后调用 `FlashStockState.rollbackReservation()`，
+  即 `EVAL stock_restore.lua mode=1`，三个键的增减在 Redis 服务端一次完成
+- **回滚失败只记日志**：`FlashStockState.apply()` 吞掉 Redis 异常。此时在途计数会残留偏高，
+  下一次库存重建因此少放库存 —— 偏高的代价是少卖，可接受；反向（凭空放出库存）不可接受。
+  同一策略也用于取消 / 退款的归还：归还失败不回滚外层 `@Transactional` 的 DB 落库，
+  避免一次 Redis 抖动把用户已成功的取消操作一起撤掉
 - **关键原则**：Redis 预扣是"乐观"操作，MQ 发送失败时不能假设 Redis 状态一定正确
 
 ### Redis Key 规范
 
 | Key 模式 | 说明 | 来源 |
 |----------|------|------|
-| `flash:stock:{flashSaleId}` | 秒杀库存余量 | `RedisConstants.FLASH_STOCK_KEY` |
+| `flash:stock:{flashSaleId}` | 秒杀库存余量（业务状态，非缓存） | `RedisConstants.FLASH_STOCK_KEY` |
+| `flash:inflight:{flashSaleId}` | 在途预扣计数：Redis 已扣、DB 未落库的量 | `RedisConstants.FLASH_INFLIGHT_KEY` |
 | `flash:sale:{flashSaleId}` | 秒杀活动详情缓存 | `RedisConstants.FLASH_SALE_KEY` |
 | `flash:user:purchased:{flashSaleId}:{userId}` | 用户已购数量 | `RedisConstants.FLASH_USER_PURCHASED_KEY` |
 | `flash:lock:{flashSaleId}` | Redisson 分布式锁 | `RedisConstants.FLASH_LOCK_KEY` |
-| `flash:msg:processed:{messageKey}` | MQ 消息幂等记录 | `RocketMQConstants.MSG_PROCESSED_KEY` |
+| `flash:msg:result:{messageKey}` | MQ 消息处理结果（DONE/FAILED，仅业务终态后由 SETNX 写入） | `RocketMQConstants.MSG_RESULT_KEY` |
 | `rate:limit:{key}:{userId\|ip:xxx}` | 接口限流滑动窗口（ZSET） | `RateLimitInterceptor` |
-| `flash:captcha:{captchaId}` | 算术验证码答案 | `RedisConstants.CAPTCHA_KEY` |
-| `active:list` | 进行中的秒杀活动列表缓存（L2） | `RedisConstants.ACTIVE_LIST_KEY` |
-| `item:{itemId}` | 商品详情缓存（L2） | `RedisConstants.ITEM_KEY` |
+| `captcha:{captchaId}` | 算术验证码答案 | `RedisConstants.CAPTCHA_KEY` |
+| `active:list` | 进行中的秒杀活动列表缓存（L2） | `RedisConstants.ACTIVE_FLASH_SALE_LIST_KEY` |
+| `item:{itemId}` | 商品详情缓存（L2） | `RedisConstants.ITEM_CACHE_KEY` |
 
-> 注：所有 TTL 均使用 `randomTtl()` 方法添加 ±300s 随机偏移，防止缓存雪崩
+> 注：`randomTtl()`（±300s 随机偏移，防雪崩）只用于纯缓存键。
+> 库存 / 已购 / 在途三个状态键的 TTL 由 `RedisConstants.stockTtlSeconds(endTime)` 决定
+> （剩余场次时间 + 1 天宽限期），用固定 TTL 会让跨小时的场次在进行中自然过期。
 
 ---
 
@@ -456,22 +501,35 @@ public class FlashOrderMessage implements Serializable {
 ```
 收到消息
   │
-  ├── 1. Redis 幂等校验：SETNX flash:msg:processed:{messageKey}
-  │      └── 已处理 → 跳过
+  ├── 1. 终态判定：GET flash:msg:result:{messageKey}
+  │      └── 已是 DONE / FAILED → 跳过（标记只在业务终态后写入，不会短路重试）
   │
   ├── 2. DB 幂等校验：FlashOrderMapper.selectByMessageKey()
-  │      └── 已存在 → 跳过（Redis key 被驱逐时的兜底）
+  │      └── 已存在 → markSettledOnly(DONE)：只补标记，不递减在途
+  │                  （订单由更早一次投递落库，那笔预扣已在那次收敛）
   │
   ├── 3. Redisson 分布式锁：flash:lock:{flashSaleId}（最长持有 10 秒）
   │
   ├── 4. 事务扣库存+创建订单：FlashOrderServiceImpl.deductStockAndCreateOrder()
-  │      └── @Transactional → DB 幂等 → 乐观锁 deductStock → INSERT order
-  │      └── 失败自动回滚
+  │      └── @Transactional：
+  │           ├─ messageKey 幂等复查 → 命中返回 null（调用方不递减在途）
+  │           ├─ checkPurchaseLimit：countQuotaOccupied 限购 DB 兜底
+  │           │    （Redis 限购键会过期/丢失，缺一层就无声变成「不限购」；
+  │           │     同一场次已被步骤 3 串行化，普通 COUNT 即可，无需 FOR UPDATE）
+  │           ├─ 乐观锁 deductStock（stock > 0 才更新，返回 0 抛 FLASH_SOLD_OUT）
+  │           └─ INSERT order（失败则 deductStock 一并回滚）
   │
-  └── 异常处理：
-         ├── BusinessException（售罄）→ 吞没不重试
-         └── 其他 Exception → re-throw 触发 RocketMQ 重试
+  └── 异常处理（终态标记与在途计数统一交给 FlashOrderSettler）：
+         ├── 本次真正落库 → settleAndRelease(DONE)：SETNX 成功才 DECR 在途
+         ├── BusinessException（售罄/超限购/活动结束）→ settleAndRelease(FAILED)，吞没不重试
+         ├── 其他 Exception → 不写标记，re-throw 触发 RocketMQ 重试
+         └── 重试耗尽进死信 → FlashOrderDeadLetterConsumer.settleAndRelease(FAILED)
 ```
+
+> **在途收敛不变式**：一笔预扣的在途计数恰好递减一次，且当且仅当某次投递真正写入了终态标记。
+> `FlashOrderSettler` 用 `setIfAbsent` 的返回值同时充当「这次投递是否负责收敛」的判据，
+> 因此主消费者与死信消费者重复处理同一条消息不会多减。
+> 误差方向是单向可接受的：多减会放出虚假库存（超卖方向），少减只会少卖。
 
 ### 消费者启用控制
 
@@ -649,8 +707,14 @@ ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
 
 | 任务 | 位置 | 频率 | 说明 |
 |------|------|------|------|
-| `FlashSaleScheduler` | flash-admin | 每 60 秒 | 自动将到达开始时间的 PENDING 活动激活（含 Redis 缓存预热），将超过结束时间的 ACTIVE 活动结束 |
-| `OrderScheduler` | flash-admin | 每 300 秒 | 自动取消超过 15 分钟未支付的订单，并归还 DB 库存和 Redis 库存 |
+| `FlashSaleScheduler` | flash-admin | 每 60 秒 | 自动将到达开始时间的 PENDING 活动激活，将超过结束时间的 ACTIVE 活动结束。激活时按 `DB stock − 在途` **SETNX 补建**库存状态键，键已存在则完全不覆盖 |
+| `OrderScheduler` | flash-admin | 每 300 秒 | 自动取消超过 15 分钟未支付的订单，归还 DB 库存后调用 `stock_restore.lua mode=0` 归还 Redis 库存与限购计数（只改已存在的键） |
+
+> ⚠️ 两个 `@Scheduled` 方法都没有分布式锁。多实例部署 flash-admin 时，同一批订单/活动会被每个实例各处理一次，
+> 表现为库存重复归还。单实例运行（当前部署形态）无此问题。
+> `cancelOrderAndRestoreStock` 里 Redis 归还与 DB 取消在同一事务内，但脚本异常被 `FlashStockState.apply()` 吞掉，
+> 事务照常提交——结果是 DB 已归还而 Redis 少归还一次，只会少卖不会超卖。
+
 
 ---
 
@@ -703,7 +767,7 @@ management:
 |------|------|------|
 | Grafana 面板 "No data" | Prometheus Targets DOWN / 指标不存在 | 检查 `http://localhost:9090/targets` |
 | P99 面板 "No data" | 缺少 `_bucket` 指标 | 配 `percentiles-histogram: true` |
-| Prometheus 拉不到本地应用 | 容器内 localhost 指向容器自身 | Prometheus targets 使用容器名（api:8081, admin:8082），本地开发需手动改为 host.docker.internal |
+| Prometheus 拉不到本地应用 | 容器内 localhost 指向容器自身 | targets 默认已指向 host.docker.internal:8081/8082（宿主机模式）；后端全容器部署时改回容器名 api:8081, admin:8082 |
 | Grafana "Failed to upgrade legacy queries" | Dashboard JSON 用旧 `rows` 格式 | 重写为扁平 `panels` 格式 |
 
 > 详细使用指南见 Obsidian 笔记：`Prometheus 从入门到排查.md`、`Grafana 看板配置实战.md`、`Sentinel Dashboard 使用指南.md`。

@@ -58,7 +58,10 @@ flash-gateway → flash-common（排除 web/tomcat/mybatis/validation 等重量�
 11. 消费者隔离：@ConditionalOnProperty(name="flash.flash.consumer.enabled")，flash-api 启用、flash-admin 禁用，避免同消费组冲突
 12. 雪花 ID（SnowflakeIdGenerator）用于分布式订单 ID，JacksonConfig 注解驱动 Long→String 序列化解决 JS 精度丢失
 13. 配置文件按环境拆分：application.yml（通用）+ application-dev.yml（本地开发）+ application-prod.yml（生产环境变量）+ application-docker.yml（Docker Compose 容器名访问）
-14. 监控栈规范：自定义指标埋点在 Controller 层（用户视角），不在 Consumer 层；Timer 必须配 `.publishPercentileHistogram()` 暴露 P99；application.yml 必须配 `percentiles-histogram: true`；Grafana Dashboard 用新版扁平 `panels` 格式（不用旧 `rows`）；Prometheus 用 `host.docker.internal` 访问宿主机本地应用
+14. 监控栈：Actuator + Micrometer + Prometheus + Grafana + Sentinel。★ 关键坑：P99 计算依赖 `_bucket` 指标，application.yml 必须配 `management.metrics.distribution.percentiles-histogram.http.server.requests: true`，否则 Grafana P99 面板 "No data"。自定义 Timer 必须加 `.publishPercentileHistogram()`。埋点在 Controller 层（用户调一次统计一次），不在 Consumer 层。★ Prometheus 抓取地址随部署方式切换，两者互斥（不可同一份配置通用）：
+  - 本地开发（后端跑宿主机、中间件与监控容器化）：`host.docker.internal:8081` / `host.docker.internal:8082`
+  - 全量容器化部署（后端在 Compose 内）：改回容器名 `api:8081` / `admin:8082`，并放开 docker-compose.yml 中 api/admin 的宿主端口映射注释
+  - 改完 `docker/prometheus/prometheus.yml` 必须执行 `docker restart flash-prometheus`——挂载的配置文件不会热加载，不重启 Targets 会停留在旧配置（表现为大盘全部 No data）
 
 ## 生成要求
 1. 直接生成可运行的完整代码
