@@ -23,13 +23,22 @@ public final class RocketMQConstants {
     /** 订单消费者组 */
     public static final String ORDER_CONSUMER_GROUP = "flash-order-consumer-group";
 
-    // ==================== 幂等 Redis Key ====================
+    // ==================== 消息处理结果 Redis Key ====================
 
-    /** MQ 消息幂等 Key 前缀，格式：flash:msg:processed:{messageKey} */
-    public static final String MSG_PROCESSED_KEY = "flash:msg:processed:";
+    /** MQ 消息处理结果 Key 前缀，格式：flash:msg:result:{messageKey}，值为下方三个状态常量之一 */
+    public static final String MSG_RESULT_KEY = "flash:msg:result:";
 
-    /** 幂等记录过期时间（秒） */
-    public static final long MSG_PROCESSED_TTL = 3600L;
+    /** 处理结果记录过期时间（秒） */
+    public static final long MSG_RESULT_TTL = 3600L;
+
+    /** 处理结果：Key 不存在时的等价状态，表示消息尚未被消费或系统异常正在重试 */
+    public static final String RESULT_PROCESSING = "PROCESSING";
+
+    /** 处理结果：订单已创建成功（业务终态，重复投递直接跳过） */
+    public static final String RESULT_DONE = "DONE";
+
+    /** 处理结果：业务终态失败（库存不足、活动已结束等），不再重试 */
+    public static final String RESULT_FAILED = "FAILED";
 
     // ==================== 死信队列 ====================
 

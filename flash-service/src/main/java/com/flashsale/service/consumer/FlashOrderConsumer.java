@@ -25,8 +25,12 @@ import java.util.concurrent.TimeUnit;
  * 秒杀订单消息消费者
  * <p>
  * 通过 RocketMQ 消费下单消息，支持多节点分布式削峰。
- * 三层幂等保障：Redis SETNX → DB messageKey 查询 → UNIQUE 索引兜底。
+ * 幂等保障：结果标记（仅在业务终态后写入）→ DB messageKey 查询 → UNIQUE 索引兜底。
+ * 系统异常不写终态标记，交由 RocketMQ 重试，重试时仍会走完整的扣库存逻辑。
  * 事务保护：deductStock + INSERT 在同一事务内，失败自动回滚。
+ * <p>
+ * 在途计数收敛统一交给 {@link FlashOrderSettler}：只有真正写入终态标记的投递才递减在途，
+ * DB 幂等命中只补写标记、不递减，避免重复递减放出虚假库存。
  * <p>
  * 仅在 flash-api 中启用（flash.flash.consumer.enabled=true），
  * flash-admin 不创建此消费者以避免同组冲突。
@@ -48,24 +52,27 @@ public class FlashOrderConsumer implements RocketMQListener<FlashOrderMessage> {
     private final StringRedisTemplate stringRedisTemplate;
     private final RedissonClient redissonClient;
     private final FlashSaleMetrics flashSaleMetrics;
+    private final FlashOrderSettler flashOrderSettler;
 
     public FlashOrderConsumer(FlashOrderService flashOrderService,
                               FlashOrderMapper flashOrderMapper,
                               StringRedisTemplate stringRedisTemplate,
                               RedissonClient redissonClient,
-                              FlashSaleMetrics flashSaleMetrics) {
+                              FlashSaleMetrics flashSaleMetrics,
+                              FlashOrderSettler flashOrderSettler) {
         this.flashOrderService = flashOrderService;
         this.flashOrderMapper = flashOrderMapper;
         this.stringRedisTemplate = stringRedisTemplate;
         this.redissonClient = redissonClient;
         this.flashSaleMetrics = flashSaleMetrics;
+        this.flashOrderSettler = flashOrderSettler;
     }
 
     /**
      * 消费秒杀下单消息
      * <p>
-     * 1. Redis 幂等校验（SETNX，快速过滤重复消息）
-     * 2. DB 幂等校验（messageKey 查询，Redis key 被驱逐后的兜底）
+     * 1. 结果标记判定（DONE / FAILED 为业务终态，跳过重复投递；标记只在终态后写入，不会短路重试）
+     * 2. DB 幂等校验（messageKey 查询，结果标记过期后的兜底）
      * 3. Redisson 分布式锁（防止并发消费同一场秒杀）
      * 4. 事务性扣库存 + 创建订单（@Transactional，失败自动回滚）
      */
@@ -75,20 +82,21 @@ public class FlashOrderConsumer implements RocketMQListener<FlashOrderMessage> {
         log.info("[异步下单] 收到 RocketMQ 消息, messageKey={}, flashSaleId={}, userId={}",
                 msgKey, message.getFlashSaleId(), message.getUserId());
 
-        // ========== 1. Redis 幂等校验（快速路径） ==========
-        String idempotentKey = RocketMQConstants.MSG_PROCESSED_KEY + msgKey;
-        Boolean success = stringRedisTemplate.opsForValue()
-                .setIfAbsent(idempotentKey, "1", RocketMQConstants.MSG_PROCESSED_TTL, TimeUnit.SECONDS);
-        if (Boolean.FALSE.equals(success)) {
-            log.warn("[异步下单] Redis 幂等命中，跳过重复消费, messageKey={}", msgKey);
+        // ========== 1. 终态判定：标记只由本消费者在业务终态后写入 ==========
+        String resultKey = RocketMQConstants.MSG_RESULT_KEY + msgKey;
+        String settled = stringRedisTemplate.opsForValue().get(resultKey);
+        if (settled != null) {
+            log.warn("[异步下单] 消息已处于终态 {}, 跳过重复消费, messageKey={}", settled, msgKey);
             return;
         }
 
-        // ========== 2. DB 幂等校验（Redis key 被驱逐时的兜底） ==========
+        // ========== 2. DB 幂等校验（结果标记过期时的兜底） ==========
         FlashOrder existingOrder = flashOrderMapper.selectByMessageKey(msgKey);
         if (existingOrder != null) {
             log.warn("[异步下单] DB 幂等命中，订单已存在, messageKey={}, orderId={}",
                     msgKey, existingOrder.getId());
+            // 订单由更早的一次投递落库，那笔预扣的在途计数已在那次收敛，这里只补写标记、不再递减
+            flashOrderSettler.markSettledOnly(message, RocketMQConstants.RESULT_DONE);
             return;
         }
 
@@ -110,17 +118,25 @@ public class FlashOrderConsumer implements RocketMQListener<FlashOrderMessage> {
             FlashOrder created = flashOrderService.deductStockAndCreateOrder(
                     message.getFlashSaleId(), order);
 
+            // created == null 表示事务内部命中 messageKey 幂等：订单由更早一次投递落库，
+            // 那笔在途已在那次收敛，此处只补标记；只有本次真正落库才递减在途。
             if (created != null) {
+                flashOrderSettler.settleAndRelease(message, RocketMQConstants.RESULT_DONE);
                 flashSaleMetrics.recordOrderSuccess();
                 log.info("[异步下单] 订单创建成功, orderId={}, messageKey={}",
                         created.getId(), msgKey);
+            } else {
+                flashOrderSettler.markSettledOnly(message, RocketMQConstants.RESULT_DONE);
             }
 
         } catch (BusinessException e) {
+            // 业务终态（库存不足、活动已结束）：重试也不会成功，写 FAILED 让客户端尽早拿到明确结果
             flashSaleMetrics.recordOrderFail();
-            log.warn("[异步下单] 业务异常不重试, messageKey={}, flashSaleId={}: {}",
+            flashOrderSettler.settleAndRelease(message, RocketMQConstants.RESULT_FAILED);
+            log.warn("[异步下单] 业务异常终态不重试, messageKey={}, flashSaleId={}: {}",
                     msgKey, message.getFlashSaleId(), e.getMessage());
         } catch (Exception e) {
+            // 系统异常：不写终态标记，交给 RocketMQ 重试重新执行扣库存
             flashSaleMetrics.recordOrderFail();
             log.error("[异步下单] 系统异常触发重试, messageKey={}, flashSaleId={}",
                     msgKey, message.getFlashSaleId(), e);
