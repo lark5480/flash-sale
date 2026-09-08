@@ -2,7 +2,9 @@ package com.flashsale.service.consumer;
 
 import com.flashsale.common.constant.RocketMQConstants;
 import com.flashsale.service.message.FlashOrderMessage;
+import com.flashsale.service.metrics.ConsumeResult;
 import com.flashsale.service.metrics.FlashSaleMetrics;
+import com.flashsale.service.metrics.OrderFailReason;
 import org.apache.rocketmq.spring.annotation.RocketMQMessageListener;
 import org.apache.rocketmq.spring.core.RocketMQListener;
 import org.slf4j.Logger;
@@ -51,7 +53,8 @@ public class FlashOrderDeadLetterConsumer implements RocketMQListener<FlashOrder
         log.error("[死信队列] 消息重试耗尽仍失败, messageKey={}, userId={}, flashSaleId={}, itemId={}, flashPrice={}",
                 message.getMessageKey(), message.getUserId(), message.getFlashSaleId(),
                 message.getItemId(), message.getFlashPrice());
-        flashSaleMetrics.recordOrderFail();
+        flashSaleMetrics.recordOrderFail(OrderFailReason.DEAD_LETTER);
+        flashSaleMetrics.recordConsume(ConsumeResult.DEAD_LETTER);
         flashOrderSettler.settleAndRelease(message, RocketMQConstants.RESULT_FAILED);
     }
 }

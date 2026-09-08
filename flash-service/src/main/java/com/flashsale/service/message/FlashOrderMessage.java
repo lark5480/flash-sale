@@ -16,15 +16,27 @@ public class FlashOrderMessage implements Serializable {
     private Long itemId;
     private BigDecimal flashPrice;
 
+    /**
+     * 消息生产时刻（毫秒时间戳），用于统计「下单 → 落库」的端到端延迟。
+     * 存量消息没有该字段时反序列化为 null，消费端会跳过延迟统计。
+     */
+    private Long produceTime;
+
     public FlashOrderMessage() {
     }
 
     public FlashOrderMessage(String messageKey, Long flashSaleId, Long userId, Long itemId, BigDecimal flashPrice) {
+        this(messageKey, flashSaleId, userId, itemId, flashPrice, System.currentTimeMillis());
+    }
+
+    public FlashOrderMessage(String messageKey, Long flashSaleId, Long userId, Long itemId,
+                             BigDecimal flashPrice, Long produceTime) {
         this.messageKey = messageKey;
         this.flashSaleId = flashSaleId;
         this.userId = userId;
         this.itemId = itemId;
         this.flashPrice = flashPrice;
+        this.produceTime = produceTime;
     }
 
     public String getMessageKey() {
@@ -65,5 +77,13 @@ public class FlashOrderMessage implements Serializable {
 
     public void setFlashPrice(BigDecimal flashPrice) {
         this.flashPrice = flashPrice;
+    }
+
+    public Long getProduceTime() {
+        return produceTime;
+    }
+
+    public void setProduceTime(Long produceTime) {
+        this.produceTime = produceTime;
     }
 }

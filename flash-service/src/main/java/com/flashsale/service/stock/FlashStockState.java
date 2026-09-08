@@ -115,6 +115,25 @@ public class FlashStockState {
     }
 
     /**
+     * 读取当前可用库存（{@code flash:stock:{id}}）。
+     * <p>
+     * 该值是「DB stock − 在途」的权威余量，比 DB 的 stock 字段实时（DB 要等 MQ 落库才减）。
+     * 展示层必须读它，否则详情页/列表页会一直显示激活那一刻冻结的旧快照。
+     *
+     * @param flashSaleId 秒杀活动 ID
+     * @return 可用库存；键不存在或读取异常返回 -1，表示「无权威计数，由调用方自行兜底」
+     */
+    public long readAvailableStock(Long flashSaleId) {
+        try {
+            String raw = stringRedisTemplate.opsForValue().get(stockKey(flashSaleId));
+            return raw == null ? -1L : Math.max(0L, Long.parseLong(raw));
+        } catch (Exception e) {
+            log.error("[库存状态] 读取可用库存失败，交由调用方兜底, flashSaleId={}", flashSaleId, e);
+            return -1L;
+        }
+    }
+
+    /**
      * 回滚一次预扣：MQ 发送失败时使用，消息从未进入队列，因此不再是「在途」。
      */
     public void rollbackReservation(Long flashSaleId, Long userId) {

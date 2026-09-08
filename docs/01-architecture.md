@@ -295,7 +295,7 @@ sequenceDiagram
 | `flash:stock:{flashSaleId}` | 秒杀库存计数器（Lua 脚本原子操作，**业务状态非缓存**） | `stockTtlSeconds` = 剩余场次 + 86400s |
 | `flash:inflight:{flashSaleId}` | 在途预扣计数：Redis 已扣、DB 未落库的量，DB 重建库存键时的校正依据 | `stockTtlSeconds` = 剩余场次 + 86400s |
 | `flash:user:purchased:{flashSaleId}:{userId}` | 用户购买次数计数，防止超限购（DB 另有 `countQuotaOccupied` 兜底） | `stockTtlSeconds` = 剩余场次 + 86400s |
-| `flash:sale:{flashSaleId}` | 活动详情缓存，减少 DB 查询 | 3600s ± 300s |
+| `flash:sale:{flashSaleId}` | 活动详情缓存（不含实时库存，见下方展示口径），减少 DB 查询 | 3600s ± 300s |
 | `flash:lock:{flashSaleId}` | Redisson 分布式锁，保证消费者同一活动串行处理库存 | 锁自动续期（watchdog） |
 | `flash:msg:result:{messageKey}` | MQ 消息处理结果标记，值为 DONE/FAILED，仅在业务终态后由 SETNX 写入 | `MSG_RESULT_TTL`（3600s） |
 | `rate:limit:{key}:{userId\|ip:xxx}` | 接口限流滑动窗口（ZSET） | window + 1s |
@@ -306,6 +306,11 @@ sequenceDiagram
 > 注：`randomTtl()`（±300s 防雪崩）只用于纯缓存键。库存 / 限购 / 在途三个状态键的 TTL 由场次结束时间决定并额外保留 1 天宽限期 ——
 > 固定 TTL 会让跨小时的场次在进行中自然过期，之后只能拿滞后的 DB 值重建，从而放出虚假库存。
 > `flash:msg:result` 的 3600s 短于状态键生命周期，因此消费者侧仍保留 DB messageKey 幂等查询作为标记过期后的兜底。
+>
+> **展示库存口径**：`flash:sale:{id}` 与 `active:list` 是某一时刻的 VO 快照，而下单只扣 `flash:stock:{id}` 与 DB，
+> 从不回写或失效这两个快照（秒杀下逐单失效热点缓存等于打穿缓存）。因此进行中场次对外展示的库存一律由
+> `FlashSaleServiceImpl.applyRealtimeStock()` 用 `flash:stock:{id}` 覆盖快照值；非进行中场次没有购买流量，
+> DB `stock` 才是权威（管理员可在停售期补货），保持快照值不变。
 > ⚠️ 已知缺陷：`randomTtl()` 的偏移固定为 ±300s，`active:list` 用 `randomTtl(30)` 时负偏移会被钳到 1s，
 > 约一半的写入只能得到 1s TTL，等于这一层 L2 缓存在大部分时间不生效。偏移量应按基数的比例取值。
 
@@ -458,15 +463,58 @@ management:
 
 ### 10.5 自定义业务指标
 
-`FlashSaleMetrics` 注册三个指标：
+**⚠️ 查询时用右列的 Prometheus 指标名**。Micrometer 的点分名暴露给 Prometheus 时会转成下划线，
+并按类型加后缀：Counter → `_total`，Timer → `_seconds`（展开为 `_bucket` / `_count` / `_sum`），Gauge 无后缀。
+直接拿左列的点分名去 Prometheus 查会报 `parse error: unexpected character: '.'`。
 
-| 指标名 | 类型 | 说明 |
-|--------|------|------|
-| `flashsale.order.success` | Counter | 下单成功次数 |
-| `flashsale.order.fail` | Counter | 下单失败次数 |
-| `flashsale.order.duration` | Timer | 下单处理耗时（含 SLO 分桶：50ms/100ms/500ms/1s/5s + 百分位直方图） |
+| 代码注册名（Micrometer） | Prometheus 指标名（查询 / 配面板用） | 类型 | tag | 说明 |
+|---|---|---|---|---|
+| `flashsale.order.success` | `flashsale_order_success_total` | Counter | — | 下单成功次数（订单真正落库） |
+| `flashsale.order.fail` | `flashsale_order_fail_total` | Counter | `reason` | 下单失败次数，按失败原因归因 |
+| `flashsale.order.duration` | `flashsale_order_duration_seconds_bucket` | Timer | — | 下单接口耗时（SLO 分桶 10ms/50ms/100ms/500ms/1s/5s + 百分位直方图） |
+| `flashsale.stock.deduct.duration` | `flashsale_stock_deduct_duration_seconds_bucket` | Timer | — | Redis Lua 预扣库存耗时 |
+| `flashsale.stock.rebuild` | `flashsale_stock_rebuild_total` | Counter | — | 库存键重建次数，非零说明 Redis 库存状态曾丢失 |
+| `flashsale.stock.remaining` | `flashsale_stock_remaining` | Gauge | `flashSaleId` | Redis 剩余可用库存（20s 采样） |
+| `flashsale.stock.inflight` | `flashsale_stock_inflight` | Gauge | `flashSaleId` | 在途预扣数（已预扣未落库），持续不为零说明消费端堵塞 |
+| `flashsale.stock.drift` | `flashsale_stock_drift` | Gauge | `flashSaleId` | 库存漂移 = DB 库存 −（Redis 库存 + 在途），正常恒为 0，非零即库存泄漏 |
+| `flashsale.mq.send` | `flashsale_mq_send_total` | Counter | `result` | MQ 发送结果：success / fail |
+| `flashsale.mq.send.duration` | `flashsale_mq_send_duration_seconds_bucket` | Timer | — | MQ 同步发送耗时 |
+| `flashsale.mq.consume` | `flashsale_mq_consume_total` | Counter | `result` | 消费结果分布：created / duplicate / business_terminal / system_retry / dead_letter |
+| `flashsale.mq.consume.duration` | `flashsale_mq_consume_duration_seconds_bucket` | Timer | — | 消息消费处理耗时 |
+| `flashsale.order.settle.latency` | `flashsale_order_settle_latency_seconds_bucket` | Timer | — | 下单消息发出到订单落库的端到端延迟 |
+| `flashsale.metrics.sample.error` | `flashsale_metrics_sample_error_total` | Counter | — | 库存指标采样失败次数，非零说明采样时 Redis/DB 访问异常 |
 
-埋点在 `FlashOrderController.purchase()` 中调用（Controller 层），用户调一次下单接口就统计一次。
+Timer 类的 `_bucket` 用于算分位数（`histogram_quantile`），`_count` / `_sum` 用于算平均耗时。
+
+`reason` tag 取值（`OrderFailReason`）：`not_found`、`not_started`、`ended`、`sold_out`、`repeat`、
+`rate_limited`、`mq_send_error`、`business_terminal`、`system_error`、`dead_letter`。
+其中 `sold_out` / `repeat` / `business_terminal` 属于正常业务终态，
+`mq_send_error` / `system_error` / `dead_letter` 才是需要告警的故障。
+
+埋点位置：
+- `FlashOrderController.purchase()`：下单接口总耗时（用户调一次统计一次，在 Controller 层而非 Consumer 层）
+- `FlashOrderServiceImpl.purchase()`：失败原因归因、Redis Lua 预扣耗时、MQ 发送失败
+- `FlashOrderProducer`：发送成功/失败与耗时
+- `FlashOrderConsumer`：消费结果分布、消费耗时、端到端延迟
+- `FlashOrderDeadLetterConsumer`：死信计数
+
+库存类 Gauge 由 `FlashStockMetricsSampler` 每 20s 采样一次，采用「定时采样 + Gauge 读内存」形态：
+Prometheus 抓取路径上不访问 Redis，避免 Redis 抖动拖垮 `/actuator/prometheus`，代价是指标有 20s 级延迟。
+该采样器仅在开启 `@EnableScheduling` 的应用（flash-admin）执行。
+
+**聚合查询需自行 sum**（指标带 tag）：
+
+```promql
+# 下单失败原因分布
+sum by (reason) (rate(flashsale_order_fail_total[5m]))
+
+# 下单成功率
+sum(rate(flashsale_order_success_total[1m]))
+  / (sum(rate(flashsale_order_success_total[1m])) + sum(rate(flashsale_order_fail_total[1m])))
+
+# 库存漂移告警（正常恒为 0）
+flashsale_stock_drift != 0
+```
 
 ### 10.6 Grafana 看板
 

@@ -1,5 +1,7 @@
 # Flash Sale - 秒杀系统
 
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+
 基于 Spring Cloud 微服务架构的秒杀系统，支持高并发场景下的商品秒杀、库存扣减和订单管理。
 
 ## 技术栈
@@ -101,7 +103,7 @@ flash-sale
 - **写操作同时失效两级缓存**，读请求逐级回源并回填
 - **缓存三级防护**：穿透防护——空值标记（`@@NULL@@`）+ 短 TTL 兜底；雪崩防护——`randomTtl()` 基于 `ThreadLocalRandom` 叠加 ±300s 随机偏移；击穿防护——Caffeine `get(key, fn)` per-key 同步 + Redis `setIfAbsent`（SETNX）原子回填
 - **Redis 缓存预热**：秒杀激活时自动写入库存 + 详情缓存
-- **Redis SETNX 原子扣库存**：单次 RTT 完成限购检查 + 库存扣减
+- **Redis Lua 原子扣库存**：单次 RTT 完成限购检查 + 库存扣减
 
 ## 环境依赖
 
@@ -244,3 +246,18 @@ Consumer 消费：幂等校验 → 分布式锁 → DB 乐观锁扣库存 → �
 | [01-架构概览](docs/01-architecture.md) | 系统架构、模块职责、核心链路、数据设计、安全认证 |
 | [02-部署指南](docs/02-deployment.md) | 中间件 Docker 配置、数据库初始化、服务启动、常见问题排查 |
 | [03-开发指南](docs/03-development.md) | API 接口文档、包结构规范、枚举值、代码规范、前端开发 |
+
+## 姊妹项目：跨服务数据一致性
+
+作者的姊妹项目 [mall-consistency-lab](https://github.com/lark5480/mall-consistency-lab) 是一个以**跨服务数据一致性**为核心设计目标的 Spring Cloud 电商系统，解决的是与本项目互补的问题：下单链路拆在三个独立库上，经 Feign 编排「远程扣库存 → 本地落单 → 失败补偿 → 定时对账」，不引入 Seata/MQ，靠 DB 唯一键幂等、状态机 CAS 与定时对账兜底保证最终一致。
+
+两个项目处在同一决策空间的两端：
+
+- **常规交易链路**（mall-consistency-lab 的领域）：QPS 有限、写跨多个服务，同步扣减能实时确认库存；异步化反而制造「下单成功但库存未扣」的窗口，补偿 + 对账比引入 MQ 更简单可解释。
+- **秒杀热路径**（本项目的核心）：洪峰必须挡在 DB 之前，Redis Lua 原子预扣 + RocketMQ 异步削峰是必要手段，用轮询 `messageKey` 消化异步窗口。
+
+两者并非对立方案：本项目消费端落库同样依赖 `message_key` 唯一索引幂等与「`UPDATE ... WHERE stock > 0`」条件更新——洪峰被缓存与消息层挡掉之后，落库层仍是同一套「唯一键原子裁决」原则。
+
+## 许可证
+
+本项目采用 [MIT](LICENSE) 许可证，与姊妹项目 [mall-consistency-lab](https://github.com/lark5480/mall-consistency-lab) 保持一致。

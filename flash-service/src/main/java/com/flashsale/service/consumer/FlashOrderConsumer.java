@@ -8,7 +8,10 @@ import com.flashsale.model.entity.FlashOrder;
 import com.flashsale.model.enums.OrderStatusEnum;
 import com.flashsale.service.FlashOrderService;
 import com.flashsale.service.message.FlashOrderMessage;
+import com.flashsale.service.metrics.ConsumeResult;
 import com.flashsale.service.metrics.FlashSaleMetrics;
+import com.flashsale.service.metrics.OrderFailReason;
+import io.micrometer.core.instrument.Timer;
 import org.apache.rocketmq.spring.annotation.RocketMQMessageListener;
 import org.apache.rocketmq.spring.core.RocketMQListener;
 import org.redisson.api.RLock;
@@ -31,6 +34,9 @@ import java.util.concurrent.TimeUnit;
  * <p>
  * 在途计数收敛统一交给 {@link FlashOrderSettler}：只有真正写入终态标记的投递才递减在途，
  * DB 幂等命中只补写标记、不递减，避免重复递减放出虚假库存。
+ * <p>
+ * 指标归因：业务终态失败（{@link ConsumeResult#BUSINESS_TERMINAL}）是重试也无意义的正常终态，
+ * 系统异常（{@link ConsumeResult#SYSTEM_RETRY}）才是故障，两者分开计数，否则故障会被正常终态淹没。
  * <p>
  * 仅在 flash-api 中启用（flash.flash.consumer.enabled=true），
  * flash-admin 不创建此消费者以避免同组冲突。
@@ -69,6 +75,19 @@ public class FlashOrderConsumer implements RocketMQListener<FlashOrderMessage> {
     }
 
     /**
+     * 消费入口：统一计时，保证任何出口（含异常重试）都记录消费耗时
+     */
+    @Override
+    public void onMessage(FlashOrderMessage message) {
+        Timer.Sample sample = flashSaleMetrics.startTimer();
+        try {
+            consume(message);
+        } finally {
+            flashSaleMetrics.stopConsumeTimer(sample);
+        }
+    }
+
+    /**
      * 消费秒杀下单消息
      * <p>
      * 1. 结果标记判定（DONE / FAILED 为业务终态，跳过重复投递；标记只在终态后写入，不会短路重试）
@@ -76,8 +95,7 @@ public class FlashOrderConsumer implements RocketMQListener<FlashOrderMessage> {
      * 3. Redisson 分布式锁（防止并发消费同一场秒杀）
      * 4. 事务性扣库存 + 创建订单（@Transactional，失败自动回滚）
      */
-    @Override
-    public void onMessage(FlashOrderMessage message) {
+    private void consume(FlashOrderMessage message) {
         String msgKey = message.getMessageKey();
         log.info("[异步下单] 收到 RocketMQ 消息, messageKey={}, flashSaleId={}, userId={}",
                 msgKey, message.getFlashSaleId(), message.getUserId());
@@ -87,6 +105,7 @@ public class FlashOrderConsumer implements RocketMQListener<FlashOrderMessage> {
         String settled = stringRedisTemplate.opsForValue().get(resultKey);
         if (settled != null) {
             log.warn("[异步下单] 消息已处于终态 {}, 跳过重复消费, messageKey={}", settled, msgKey);
+            flashSaleMetrics.recordConsume(ConsumeResult.DUPLICATE);
             return;
         }
 
@@ -97,6 +116,7 @@ public class FlashOrderConsumer implements RocketMQListener<FlashOrderMessage> {
                     msgKey, existingOrder.getId());
             // 订单由更早的一次投递落库，那笔预扣的在途计数已在那次收敛，这里只补写标记、不再递减
             flashOrderSettler.markSettledOnly(message, RocketMQConstants.RESULT_DONE);
+            flashSaleMetrics.recordConsume(ConsumeResult.DUPLICATE);
             return;
         }
 
@@ -123,21 +143,26 @@ public class FlashOrderConsumer implements RocketMQListener<FlashOrderMessage> {
             if (created != null) {
                 flashOrderSettler.settleAndRelease(message, RocketMQConstants.RESULT_DONE);
                 flashSaleMetrics.recordOrderSuccess();
+                flashSaleMetrics.recordConsume(ConsumeResult.CREATED);
+                flashSaleMetrics.recordSettleLatency(message.getProduceTime());
                 log.info("[异步下单] 订单创建成功, orderId={}, messageKey={}",
                         created.getId(), msgKey);
             } else {
                 flashOrderSettler.markSettledOnly(message, RocketMQConstants.RESULT_DONE);
+                flashSaleMetrics.recordConsume(ConsumeResult.DUPLICATE);
             }
 
         } catch (BusinessException e) {
             // 业务终态（库存不足、活动已结束）：重试也不会成功，写 FAILED 让客户端尽早拿到明确结果
-            flashSaleMetrics.recordOrderFail();
+            flashSaleMetrics.recordOrderFail(OrderFailReason.BUSINESS_TERMINAL);
+            flashSaleMetrics.recordConsume(ConsumeResult.BUSINESS_TERMINAL);
             flashOrderSettler.settleAndRelease(message, RocketMQConstants.RESULT_FAILED);
             log.warn("[异步下单] 业务异常终态不重试, messageKey={}, flashSaleId={}: {}",
                     msgKey, message.getFlashSaleId(), e.getMessage());
         } catch (Exception e) {
             // 系统异常：不写终态标记，交给 RocketMQ 重试重新执行扣库存
-            flashSaleMetrics.recordOrderFail();
+            flashSaleMetrics.recordOrderFail(OrderFailReason.SYSTEM_ERROR);
+            flashSaleMetrics.recordConsume(ConsumeResult.SYSTEM_RETRY);
             log.error("[异步下单] 系统异常触发重试, messageKey={}, flashSaleId={}",
                     msgKey, message.getFlashSaleId(), e);
             throw e;
