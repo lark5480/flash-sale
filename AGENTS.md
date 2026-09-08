@@ -71,3 +71,9 @@ flash-gateway → flash-common（排除 web/tomcat/mybatis/validation 等重量�
 5. 生成干净、优雅、可直接上线
 6. 新增模块需在父 pom.xml 注册 `<module>`
 7. 新增 Entity 放在 flash-model，Mapper 放在 flash-mapper，Service 放在 flash-service，Controller 按端放在 flash-api 或 flash-admin
+
+## 版本策略
+1. 项目功能已完成，技术栈**有意冻结**：Spring Boot 3.2.0 / Spring Cloud 2023.0.0 / Spring Cloud Alibaba 2023.0.1.0 / Nacos v2.5.1（Boot 3.2 已于 2024-12 OSS EOL，属知情决策，非欠账）
+2. 未经用户明确要求，**禁止升级框架/中间件版本**，修改 pom 或 docker-compose 时不得顺手 bump 版本号
+3. 解冻条件（满足其一）：用户要求重启功能开发；项目需部署公网跑真实流量
+4. 若解冻升级，参照姊妹项目 mall-consistency-lab 已验证组合：Boot 3.5.16 / Spring Cloud 2025.0.3 / SCA 2025.0.0.0 / Nacos v3.0.3 / MP 3.5.17。★ 关键坑：MP 3.5.9+ 将分页拦截器拆分到 mybatis-plus-jsqlparser，必须与 starter 成对引入，否则 MyBatisPlusConfig 分页运行时报错

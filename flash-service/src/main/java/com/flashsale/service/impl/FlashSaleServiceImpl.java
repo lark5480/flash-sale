@@ -238,12 +238,16 @@ public class FlashSaleServiceImpl implements FlashSaleService {
                 return resultJson;
             });
 
-            return objectMapper.readValue(json,
+            List<FlashSaleVO> sales = objectMapper.readValue(json,
                     objectMapper.getTypeFactory().constructCollectionType(List.class, FlashSaleVO.class));
+            sales.forEach(this::applyRealtimeStock);
+            return sales;
         } catch (Exception e) {
             log.error("[缓存] getActiveFlashSales 异常, error={}", e.getMessage(), e);
             // 降级：直接查 DB
-            return loadActiveFlashSalesFromDb();
+            List<FlashSaleVO> fallback = loadActiveFlashSalesFromDb();
+            fallback.forEach(this::applyRealtimeStock);
+            return fallback;
         }
     }
 
@@ -401,7 +405,9 @@ public class FlashSaleServiceImpl implements FlashSaleService {
                 throw new BusinessException(ResultCode.NOT_FOUND, "flash sale not found");
             }
 
-            return objectMapper.readValue(json, FlashSaleVO.class);
+            FlashSaleVO vo = objectMapper.readValue(json, FlashSaleVO.class);
+            applyRealtimeStock(vo);
+            return vo;
         } catch (BusinessException e) {
             throw e;
         } catch (Exception e) {
@@ -444,6 +450,32 @@ public class FlashSaleServiceImpl implements FlashSaleService {
         // 广播缓存失效，通知其他节点 invalidate 各自的 Caffeine
         cacheInvalidatePublisher.publish(CacheInvalidateMessage.CACHE_FLASH_SALE_DETAIL, caffeineKey);
         cacheInvalidatePublisher.publish(CacheInvalidateMessage.CACHE_ACTIVE_FLASH_SALE, CacheInvalidateMessage.KEY_ALL);
+    }
+
+    /**
+     * 用 Redis 权威库存覆盖详情缓存里的 stock 快照。
+     * <p>
+     * {@code flash:sale:{id}} / {@code active:list} 存的是「某一时刻的 VO 快照」（TTL 最长 1 小时），
+     * 而下单链路只扣 {@code flash:stock:{id}} 与 DB，从不回写这两个快照，也不 evict 它们——
+     * 秒杀下每单都失效详情缓存等于把热点缓存打穿。结果就是详情页/列表页的库存被冻结在
+     * 预热那一刻的值，用户看到「下了几单库存纹丝不动」。
+     * <p>
+     * 因此进行中场次的展示库存一律以 {@code flash:stock:{id}} 为准（它已扣掉在途预扣，
+     * 比 DB 更实时）；非进行中场次没有购买流量，DB stock 才是权威（管理员可在停售期补货），
+     * 保持 DB 值不变。
+     */
+    private void applyRealtimeStock(FlashSaleVO vo) {
+        if (vo == null || vo.getId() == null) {
+            return;
+        }
+        if (FlashSaleStatusEnum.codeOf(vo.getStatus()) != FlashSaleStatusEnum.ACTIVE) {
+            return;
+        }
+        long available = flashStockState.readAvailableStock(vo.getId());
+        if (available < 0) {
+            return;
+        }
+        vo.setStock((int) Math.min(available, Integer.MAX_VALUE));
     }
 
     private FlashSaleVO buildFlashSaleVO(FlashSale flashSale) {
