@@ -9,7 +9,7 @@ spring:
         password: nacos
 
 jwt:
-  secret: flash-sale-secret-key-min-256-bits-long-for-hs256
+  secret: ${JWT_SECRET}
   expiration: 1800000
   refresh-expiration: 604800000
 

@@ -19,7 +19,7 @@ import java.util.Date;
 @Component
 public class JwtUtil {
 
-    @Value("${jwt.secret:flash-sale-secret-key-min-256-bits-long-for-hs256}")
+    @Value("${jwt.secret}")
     private String secret;
 
     /** Access Token 有效期（毫秒），默认 30 分钟 */

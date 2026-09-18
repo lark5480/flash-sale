@@ -30,3 +30,18 @@ jobs:
           name: jar-artifacts
           path: '**/target/*.jar'
           retention-days: 7
+
+  # 密钥门禁：只扫已提交历史（配置文件里的低熵占位口令它抓不到，别把"通过"当成无明文密钥）
+  secret-scan:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Gitleaks
+        run: |
+          docker run --rm -v "$GITHUB_WORKSPACE:/repo" ghcr.io/gitleaks/gitleaks:v8.21.2 \
+            detect -s /repo --no-banner --redact --exit-code 1
