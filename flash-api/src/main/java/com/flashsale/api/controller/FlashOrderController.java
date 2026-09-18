@@ -2,6 +2,7 @@ package com.flashsale.api.controller;
 
 import com.baomidou.mybatisplus.core.metadata.IPage;
 import com.flashsale.common.annotation.RateLimit;
+import com.flashsale.common.constant.RocketMQConstants;
 import com.flashsale.common.result.ResultCode;
 import com.flashsale.common.result.ResultVO;
 import com.flashsale.model.entity.FlashOrder;
@@ -80,12 +81,18 @@ public class FlashOrderController {
      * 客户端用 purchase 返回的 messageKey 轮询此接口
      *
      * @param messageKey MQ 消息幂等键
-     * @return "PROCESSING" 处理中、"DONE" 订单已创建、"FAILED" 业务终态失败
+     * @return {@code status} 为 PROCESSING / DONE / FAILED 三选一；业务终态失败时额外带
+     *         {@code failReason}（如「已达每人限购数量」），客户端不必再猜失败原因
      */
     @GetMapping("/order/status")
     public ResultVO<Map<String, String>> orderStatus(@RequestParam String messageKey) {
-        String status = flashOrderService.getOrderStatus(messageKey);
-        return ResultVO.success(Map.of("status", status, "messageKey", messageKey));
+        String marker = flashOrderService.getProcessingMarker(messageKey);
+        String status = RocketMQConstants.statusOf(marker);
+        String failReason = RocketMQConstants.failReasonOf(marker);
+        if (failReason == null) {
+            return ResultVO.success(Map.of("status", status, "messageKey", messageKey));
+        }
+        return ResultVO.success(Map.of("status", status, "messageKey", messageKey, "failReason", failReason));
     }
 
     /**

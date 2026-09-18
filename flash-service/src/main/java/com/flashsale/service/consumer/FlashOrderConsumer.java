@@ -153,10 +153,11 @@ public class FlashOrderConsumer implements RocketMQListener<FlashOrderMessage> {
             }
 
         } catch (BusinessException e) {
-            // 业务终态（库存不足、活动已结束）：重试也不会成功，写 FAILED 让客户端尽早拿到明确结果
+            // 业务终态（库存不足、活动已结束、限购兜底命中）：重试也不会成功，
+            // 写带原因的 FAILED 标记，让客户端尽早拿到明确结果而不是继续转圈
             flashSaleMetrics.recordOrderFail(OrderFailReason.BUSINESS_TERMINAL);
             flashSaleMetrics.recordConsume(ConsumeResult.BUSINESS_TERMINAL);
-            flashOrderSettler.settleAndRelease(message, RocketMQConstants.RESULT_FAILED);
+            flashOrderSettler.settleAndRelease(message, RocketMQConstants.failedMarker(e.getMessage()));
             log.warn("[异步下单] 业务异常终态不重试, messageKey={}, flashSaleId={}: {}",
                     msgKey, message.getFlashSaleId(), e.getMessage());
         } catch (Exception e) {

@@ -196,10 +196,10 @@ com.flashsale
 | GET | `/api/auth/captcha` | 获取算术验证码（返回 captchaId + 表达式） | 否 |
 | GET | `/api/item/list?page=1&size=10` | 商品列表（分页） | 是 |
 | GET | `/api/item/{id}` | 商品详情 | 是 |
-| GET | `/api/flash-sale/active` | 当前进行中的秒杀活动列表 | 是 |
-| GET | `/api/flash-sale/{id}` | 秒杀活动详情（含关联商品信息） | 是 |
+| GET | `/api/flash-sale/active` | 当前进行中的秒杀活动列表 | 否（游客可浏览） |
+| GET | `/api/flash-sale/{id}` | 秒杀活动详情（含关联商品信息） | 否（仅 GET，游客可浏览） |
 | POST | `/api/flash-sale/{id}/purchase` | 秒杀下单（需验证码），返回 messageKey | 是 |
-| GET | `/api/order/status?messageKey=` | 轮询订单异步处理状态（PROCESSING / DONE / FAILED） | 是 |
+| GET | `/api/order/status?messageKey=` | 轮询订单异步处理状态（PROCESSING / DONE / FAILED；业务终态失败时另返回 `failReason`，如「已达每人限购数量」） | 是 |
 | GET | `/api/order/list?page=1&size=10&status=&keyword=` | 我的订单列表（分页，支持状态筛选与订单号/商品名称搜索） | 是 |
 | GET | `/api/order/{id}` | 订单详情 | 是 |
 | POST | `/api/order/{id}/pay` | 支付订单 | 是 |
@@ -266,9 +266,16 @@ com.flashsale
 
 **Gateway 层鉴权（`AuthGlobalFilter`）：**
 
-- 以下路径跳过鉴权：`/api/auth/register`、`/api/auth/login`、`/api/auth/refresh`、`/admin/auth/login`
-- 其他路径必须在 `Authorization` 请求头中携带 `Bearer {token}`
+- 精确放行的路径：`/api/auth/register`、`/api/auth/login`、`/api/auth/refresh`、`/api/auth/captcha`、`/admin/auth/login`、`/admin/auth/captcha`、`/api/flash-sale/active`
+- 前缀放行：`/images/**`；仅 GET 放行：`/api/flash-sale/{id}`（秒杀详情要能被游客打开）
+- 其他路径必须在 `Authorization` 请求头中携带 `Bearer {token}`，缺失或无效直接返回 **401**
 - 请求进入网关即统一剥离客户端自带的 `X-User-Id`/`X-User-Role` 请求头，Token 校验通过后再按 JWT 中的身份重写这两个头（仅辅助信息，非信任边界，见下方说明）
+
+**api 层二次判定（`ApiSecurityConfig`）：**
+
+网关放行只代表「请求能到 flash-api」，flash-api 自己还有一道 `permitAll` 清单，**两份清单必须同步维护**——只改一处就会出现「网关说公开、api 拒 403」的裂口（2026-09-18 端到端实测查出的真实缺陷：游客打不开 C 端首页与详情）。当前 api 侧放行 `/api/auth/**`、GET `/api/flash-sale/active` 与 GET `/api/flash-sale/{id:\\d+}`（id 限定纯数字，避免游客借任意子路径打到 `/{id}` 处理器），其余一律要求认证。
+
+**返回码口径：** 无有效凭据 **401**、凭据有效但权限不足 **403**（`ApiSecurityConfig.applyErrorResponses` 显式配置；Spring Security 默认的 `Http403ForbiddenEntryPoint` 会把两者一律变成裸 403，前端就分不清「该跳登录」还是「没权限」）。响应体统一为 `ResultVO`。
 
 **Service 层认证（`JwtAuthenticationFilter`）：**
 
@@ -476,7 +483,7 @@ Lua 预扣成功后 Redis 状态已变更（库存 -1、已购 +1、在途 +1）
 | `flash:sale:{flashSaleId}` | 秒杀活动详情缓存（不含实时库存，展示时由 `flash:stock:{id}` 覆盖） | `RedisConstants.FLASH_SALE_KEY` |
 | `flash:user:purchased:{flashSaleId}:{userId}` | 用户已购数量 | `RedisConstants.FLASH_USER_PURCHASED_KEY` |
 | `flash:lock:{flashSaleId}` | Redisson 分布式锁 | `RedisConstants.FLASH_LOCK_KEY` |
-| `flash:msg:result:{messageKey}` | MQ 消息处理结果（DONE/FAILED，仅业务终态后由 SETNX 写入） | `RocketMQConstants.MSG_RESULT_KEY` |
+| `flash:msg:result:{messageKey}` | MQ 消息处理结果（`DONE` / `FAILED` / `FAILED:原因`，仅业务终态后由 SETNX 写入；编解码见 `RocketMQConstants.failedMarker/statusOf/failReasonOf`） | `RocketMQConstants.MSG_RESULT_KEY` |
 | `rate:limit:{key}:{userId\|ip:xxx}` | 接口限流滑动窗口（ZSET） | `RateLimitInterceptor` |
 | `captcha:{captchaId}` | 算术验证码答案 | `RedisConstants.CAPTCHA_KEY` |
 | `active:list` | 进行中的秒杀活动列表缓存（L2） | `RedisConstants.ACTIVE_FLASH_SALE_LIST_KEY` |
@@ -521,7 +528,7 @@ public class FlashOrderMessage implements Serializable {
 收到消息
   │
   ├── 1. 终态判定：GET flash:msg:result:{messageKey}
-  │      └── 已是 DONE / FAILED → 跳过（标记只在业务终态后写入，不会短路重试）
+  │      └── 状态按前缀解析（FAILED:原因 也算终态）→ 跳过（标记只在业务终态后写入，不会短路重试）
   │
   ├── 2. DB 幂等校验：FlashOrderMapper.selectByMessageKey()
   │      └── 已存在 → markSettledOnly(DONE)：只补标记，不递减在途
@@ -535,14 +542,17 @@ public class FlashOrderMessage implements Serializable {
   │           ├─ checkPurchaseLimit：countQuotaOccupied 限购 DB 兜底
   │           │    （Redis 限购键会过期/丢失，缺一层就无声变成「不限购」；
   │           │     同一场次已被步骤 3 串行化，普通 COUNT 即可，无需 FOR UPDATE）
+  │           │    （限购口径 = 整场累计、无每日清零：`status NOT IN (2,3)` 即待支付/已支付
+  │           │     占额度，取消与退款释放，与归还脚本递减 Redis 限购计数同一口径）
   │           ├─ 乐观锁 deductStock（stock > 0 才更新，返回 0 抛 FLASH_SOLD_OUT）
   │           └─ INSERT order（失败则 deductStock 一并回滚）
   │
   └── 异常处理（终态标记与在途计数统一交给 FlashOrderSettler）：
          ├── 本次真正落库 → settleAndRelease(DONE)：SETNX 成功才 DECR 在途
-         ├── BusinessException（售罄/超限购/活动结束）→ settleAndRelease(FAILED)，吞没不重试
+         ├── BusinessException（售罄/超限购/活动结束）→ settleAndRelease(failedMarker(e.getMessage()))
+         │      写入 `FAILED:已达每人限购数量` 这类带原因的标记，吞没不重试；客户端轮询即可拿到真因
          ├── 其他 Exception → 不写标记，re-throw 触发 RocketMQ 重试
-         └── 重试耗尽进死信 → FlashOrderDeadLetterConsumer.settleAndRelease(FAILED)
+         └── 重试耗尽进死信 → FlashOrderDeadLetterConsumer.settleAndRelease(failedMarker("处理多次重试仍失败，请重新下单"))
 ```
 
 > **在途收敛不变式**：一笔预扣的在途计数恰好递减一次，且当且仅当某次投递真正写入了终态标记。
@@ -815,6 +825,36 @@ management:
 
 > 详细使用指南见 Obsidian 笔记：`Prometheus 从入门到排查.md`、`Grafana 看板配置实战.md`、`Sentinel Dashboard 使用指南.md`。
 > 架构总览见 [01-架构文档](./01-architecture.md) 第 10 节。
+
+---
+
+## 11. 测试
+
+**现状**：后端 49 个用例（flash-common 15 / flash-service 34），CI 跑 `mvn -B clean verify`（已不再 `-DskipTests`）。
+
+| 测试类 | 覆盖的不变式 |
+|--------|--------------|
+| `RedisConstantsTest` | 状态键 TTL 必须覆盖整场 + 宽限期；`randomTtl` 的已知缺陷被显式钉住 |
+| `FlashStockStateTest` | 库存键存在就绝不覆盖、重建 = `DB stock − 在途`、在途读失败 fail-closed、归还三模式参数 |
+| `FlashOrderSettlerTest` | 只有写入终态标记的投递递减在途；重复投递与写失败都不重复减 |
+| `StockScriptRedisIntegrationTest` | 两处 Lua 对**真实 Redis** 的语义：原子扣减、TTL 只在首次设置、键缺失不回源、归还的 EXISTS 守卫、在途不归负、200 并发抢 50 库存不超卖 |
+| `RocketMQConstantsTest` | 终态标记 `FAILED[:原因]` 的编解码；带原因的 FAILED 仍须被判成 FAILED |
+| `FlashSaleDetailStockTest` / `FlashStockMetricsSamplerTest` / `FlexibleLocalDateTimeDeserializerTest` | 展示口径读 Redis 权威余量、指标采样、时间格式兼容 |
+
+**怎么跑**：
+
+```bash
+mvn clean verify                                        # 全量（含真实 Redis 集成测试，需 Docker）
+mvn -o -pl flash-service -am clean test                  # 只测一个模块：-am 不可省
+mvn -o -pl flash-service -am test -Dtest=StockScriptRedisIntegrationTest \
+    -Dsurefire.failIfNoSpecifiedTests=false              # 只跑一个类
+```
+
+`-am` 必须带：否则兄弟模块会按本地仓库里**已安装的旧 jar** 解析，报出 `NoSuchMethodError` 这类容易误判成代码缺陷的错。`StockScriptRedisIntegrationTest` 标注了 `@Testcontainers(disabledWithoutDocker = true)`，没有 Docker 的机器整类跳过而不是失败。
+
+**约定**：改动秒杀链路（库存 / 限购 / 在途 / 终态收敛）的不变式必须带可跑测试，并且用「注入回归 → 确认只被指定用例杀掉」验证测试不是空跑；跑 `java -jar` 前一律 `mvn clean package`，别信增量构建。
+
+**目前没有自动化守护的部分**：api 层鉴权清单（与网关白名单的一致性只能靠端到端实测）、MQ 真实投递与重试/死信、DB 落库 SQL、网关与启动流程、wrk 量级并发。
 
 ---
 

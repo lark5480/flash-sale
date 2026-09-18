@@ -113,29 +113,19 @@ public class FlashOrderServiceImpl implements FlashOrderService {
         return flashOrderMapper.selectPage(new Page<>(page, size), wrapper);
     }
 
-    @Override
-    public long countByUserAndFlashSale(Long userId, Long flashSaleId) {
-        LambdaQueryWrapper<FlashOrder> wrapper = new LambdaQueryWrapper<>();
-        wrapper.eq(FlashOrder::getUserId, userId)
-                .eq(FlashOrder::getFlashSaleId, flashSaleId)
-                .ne(FlashOrder::getStatus, OrderStatusEnum.CANCELLED.getCode());
-        return flashOrderMapper.selectCount(wrapper);
-    }
-
     /**
-     * 查询订单处理状态（基于 MQ 消息处理结果标记）
+     * 读取 MQ 处理结果标记原值。
      * <p>
-     * 结果标记只由消费者在业务终态后写入，因此 PROCESSING 同时覆盖
-     * 「消息尚未被消费」与「系统异常正在重试中」两种情况。
+     * 结果标记只由消费者在业务终态后写入，因此「无标记」同时覆盖「消息尚未被消费」与
+     * 「系统异常正在重试中」两种情况，两者都还得继续轮询，故不在此处折算成状态字符串；
+     * 失败标记可能形如 {@code FAILED:已达每人限购数量}，由调用方解析出状态与原因。
      *
      * @param messageKey MQ 消息唯一键
-     * @return {@code DONE} 订单已创建、{@code FAILED} 业务终态失败、{@code PROCESSING} 仍在处理
+     * @return 标记原值；键不存在返回 null，表示仍在处理
      */
     @Override
-    public String getOrderStatus(String messageKey) {
-        String status = stringRedisTemplate.opsForValue()
-                .get(RocketMQConstants.MSG_RESULT_KEY + messageKey);
-        return status != null ? status : RocketMQConstants.RESULT_PROCESSING;
+    public String getProcessingMarker(String messageKey) {
+        return stringRedisTemplate.opsForValue().get(RocketMQConstants.MSG_RESULT_KEY + messageKey);
     }
 
     /**

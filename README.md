@@ -21,7 +21,8 @@
 | 熔断降级 | Sentinel 1.8.8（@SentinelResource 业务层限流/熔断） |
 | 前端 | Vue 3 + Vite + Element Plus (管理端) |
 | 部署 | Docker Compose（14 服务编排） |
-| CI | GitHub Actions（Maven 构建 + Artifact 上传） |
+| 测试 | JUnit 5 + AssertJ + Mockito；Testcontainers 起真实 Redis 验证库存 Lua（49 个用例） |
+| CI | GitHub Actions（`mvn -B clean verify`：测试 + 构建 + Artifact 上传） |
 
 ## 项目结构
 
@@ -62,6 +63,7 @@ flash-sale
 - 用户列表 + 启用/禁用
 
 ### 安全防护
+- 鉴权两道清单必须同步：网关 `AuthGlobalFilter`（放行注册/登录/验证码、`/images/**`、以及游客可浏览的秒杀列表与 GET 详情）+ flash-api `ApiSecurityConfig` 的 `permitAll`。网关放行只代表请求能到下游，api 仍会二次判定；只改一处会出现「网关说公开、api 拒 403」。返回码：**未登录 401、权限不足 403**。下单/订单类接口一律要求登录（游客能看不能买）
 - 接口限流（@RateLimit 注解 + Redis ZSET 滑动窗口）—— **控制层限流**
   - 秒杀下单：5 次 / 5 秒
   - C 端登录：5 次 / 60 秒
@@ -78,7 +80,8 @@ flash-sale
 ### 消息可靠性
 - RocketMQ Broker `flushDiskType = SYNC_FLUSH`（同步刷盘，消息不丢）
 - Consumer `maxReconsumeTimes = 3`（重试 3 次后进死信队列）
-- 死信队列消费者 `FlashOrderDeadLetterConsumer` 记录重试耗尽消息，供人工补偿
+- 死信队列消费者 `FlashOrderDeadLetterConsumer` 记录重试耗尽消息供人工补偿，并补写 `FAILED:原因` 终态标记，避免客户端永远轮询到 PROCESSING
+- 业务终态失败写 `FAILED:原因`（如「已达每人限购数量」），`/api/order/status` 解出 `status` + `failReason` 回传前端
 - Broker 原生 Prometheus 指标导出（端口 5557）
 
 ### 可观测性
@@ -96,7 +99,7 @@ flash-sale
 - 订单超时自动取消（15 分钟未支付，自动归还 DB + Redis 库存，递减用户购买计数）
 - Token 刷新
 - 启动时自动初始化默认管理员账号（admin / admin123）
-- GitHub Actions CI：push 到 master/dev 自动构建，产物上传 Artifact
+- GitHub Actions CI：push 到 master/dev 自动跑 `mvn -B clean verify`（测试 + 构建），产物上传 Artifact
 
 ### 缓存策略
 - **三级缓存**：L1 Caffeine（秒级 TTL）→ L2 Redis（分钟级 TTL）→ DB 兜底回源，活动列表同样走三级缓存
@@ -151,8 +154,8 @@ mysql -u root -p < sql/init.sql
 #### 3. 启动后端服务
 
 ```bash
-# 编译
-mvn clean package -DskipTests
+# 编译（跑全部后端测试；无 Docker 时真实 Redis 的集成测试整类跳过）
+mvn clean verify
 
 # 按顺序启动（网关最后）
 java -jar flash-api/target/flash-api-1.0.0.jar
@@ -195,10 +198,10 @@ cd flash-admin-frontend && npm install && npm run dev
 | GET | /api/auth/captcha | 获取验证码 | 否 |
 | GET | /api/item/list | 商品列表 | 是 |
 | GET | /api/item/{id} | 商品详情 | 是 |
-| GET | /api/flash-sale/active | 进行中的秒杀活动 | 是 |
-| GET | /api/flash-sale/{id} | 秒杀活动详情 | 是 |
+| GET | /api/flash-sale/active | 进行中的秒杀活动 | 否（游客可浏览） |
+| GET | /api/flash-sale/{id} | 秒杀活动详情 | 否（仅 GET，游客可浏览） |
 | POST | /api/flash-sale/{id}/purchase | 秒杀下单（需验证码） | 是 |
-| GET | /api/order/status?messageKey= | 轮询订单状态 | 是 |
+| GET | /api/order/status?messageKey= | 轮询订单状态（PROCESSING / DONE / FAILED + `failReason`） | 是 |
 | GET | /api/order/list?page=1&size=10&status=&keyword= | 我的订单（分页 + 状态筛选 + 关键词搜索） | 是 |
 | GET | /api/order/{id} | 订单详情 | 是 |
 | POST | /api/order/{id}/pay | 支付订单 | 是 |
@@ -236,7 +239,7 @@ RocketMQ 异步发送下单消息
     ↓
 Consumer 消费：幂等校验 → 分布式锁 → DB 乐观锁扣库存 → 创建订单
     ↓
-客户端轮询 /order/status 获取结果
+客户端轮询 /order/status 获取结果（失败时带 failReason）
 ```
 
 ## 文档

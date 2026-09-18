@@ -243,6 +243,7 @@ async function handlePurchase() {
     // Poll for order creation (max 20 attempts, ~10s)
     let confirmed = false
     let failed = false
+    let failReason = ''
     for (let i = 0; i < 20; i++) {
       await new Promise(r => setTimeout(r, 500))
       try {
@@ -254,6 +255,7 @@ async function handlePurchase() {
         }
         if (status === 'FAILED') {
           failed = true
+          failReason = statusRes.data?.failReason || ''
           break
         }
       } catch (e) {
@@ -265,7 +267,7 @@ async function handlePurchase() {
       toast.success('订单已创建，正在跳转...')
       router.push('/orders')
     } else if (failed) {
-      toast.error('抢购未成功，库存已耗尽或活动已结束')
+      toast.error(failReason ? `抢购未成功：${failReason}` : '抢购未成功，请稍后在订单页确认')
       refreshCaptcha()
     } else {
       toast.success('抢购请求已提交，请稍后查看订单')
