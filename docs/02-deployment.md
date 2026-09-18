@@ -152,8 +152,10 @@ docker exec -i flash-mysql mysql -u root -proot123 flash_sale -e "SELECT id,name
 在项目根目录执行 Maven 编译：
 
 ```bash
-mvn clean package -DskipTests
+mvn clean verify
 ```
+
+`verify` 会跑全部后端测试（与 CI 同一命令）；其中 `StockScriptRedisIntegrationTest` 需要 Docker，本机没有 Docker 时整类跳过。确实只想出包不想跑测试时用 `mvn clean package -DskipTests`。
 
 编译完成后，各可启动模块的 JAR 包位于对应模块的 `target/` 目录下。
 
