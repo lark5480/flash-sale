@@ -38,13 +38,14 @@ docker compose up -d mysql redis nacos rocketmq-namesrv rocketmq-broker
 
 首次启动会拉取镜像，等待约 2-3 分钟。
 
-> **只起中间件不需要任何额外变量。** 但 `docker compose up -d` 全量启动（含 api / admin / gateway）前必须先准备签名密钥：
-> docker profile 的 `jwt.secret` 已改成 `${JWT_SECRET}`，缺失时 Compose 直接报错而不是用仓库里的 key 起服务。
-> 在项目根目录建 `.env`（已被 `.gitignore` 忽略）：
+> **只起/停中间件不需要任何额外变量**（`docker compose up -d mysql redis …`、`docker compose down` 都不碰密钥）。
+> 但要用 Compose 起 api / admin / gateway 容器时，必须先提供签名密钥：docker profile 的 `jwt.secret` 是
+> `${JWT_SECRET}`，Compose 只透传，缺失时由 `JwtUtil` 在启动阶段直接报错（不会退回仓库里的 key 静默签发）。
 >
 > ```bash
-> # .env —— 换一把随机串即可，长度 ≥ 32 位；不要提交
-> JWT_SECRET=<openssl rand -base64 48 的输出>
+> # 项目根目录复制样例后填值；.env 已被 .gitignore 忽略，不要提交
+> cp .env.example .env
+> # 生成一把：openssl rand -base64 48
 > ```
 
 ### 2.2 验证中间件启动状态

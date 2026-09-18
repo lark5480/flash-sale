@@ -106,9 +106,10 @@ services:
       - "8080:8080"
     environment:
       - SPRING_PROFILES_ACTIVE=docker
-      # 签名密钥不进仓库：缺失时 Compose 直接报错，避免容器带着「仓库里的公开 key」启动后被伪造 ADMIN Token
-      # 本地跑法：在项目根目录建 .env（已被 .gitignore 忽略），写入 JWT_SECRET=<32 位以上随机串>
-      - JWT_SECRET=${JWT_SECRET:?JWT_SECRET 未设置 请在项目根目录 .env 中提供一把随机签名密钥}
+      # 签名密钥不进仓库。这里只做透传（不在 Compose 层用 :? 卡住，否则连 down 都跑不动）：
+      # 未设置时传空值，由 JwtUtil 启动校验直接报错拒绝启动，而不是用仓库里的 key 静默签发
+      # 本地跑法：项目根目录建 .env（已被 .gitignore 忽略），参照 .env.example
+      - JWT_SECRET=${JWT_SECRET:-}
 
   api:
     build:
@@ -131,9 +132,10 @@ services:
     #   - "8081:8081"
     environment:
       - SPRING_PROFILES_ACTIVE=docker
-      # 签名密钥不进仓库：缺失时 Compose 直接报错，避免容器带着「仓库里的公开 key」启动后被伪造 ADMIN Token
-      # 本地跑法：在项目根目录建 .env（已被 .gitignore 忽略），写入 JWT_SECRET=<32 位以上随机串>
-      - JWT_SECRET=${JWT_SECRET:?JWT_SECRET 未设置 请在项目根目录 .env 中提供一把随机签名密钥}
+      # 签名密钥不进仓库。这里只做透传（不在 Compose 层用 :? 卡住，否则连 down 都跑不动）：
+      # 未设置时传空值，由 JwtUtil 启动校验直接报错拒绝启动，而不是用仓库里的 key 静默签发
+      # 本地跑法：项目根目录建 .env（已被 .gitignore 忽略），参照 .env.example
+      - JWT_SECRET=${JWT_SECRET:-}
 
   admin:
     build:
@@ -155,9 +157,10 @@ services:
     #   - "8082:8082"
     environment:
       - SPRING_PROFILES_ACTIVE=docker
-      # 签名密钥不进仓库：缺失时 Compose 直接报错，避免容器带着「仓库里的公开 key」启动后被伪造 ADMIN Token
-      # 本地跑法：在项目根目录建 .env（已被 .gitignore 忽略），写入 JWT_SECRET=<32 位以上随机串>
-      - JWT_SECRET=${JWT_SECRET:?JWT_SECRET 未设置 请在项目根目录 .env 中提供一把随机签名密钥}
+      # 签名密钥不进仓库。这里只做透传（不在 Compose 层用 :? 卡住，否则连 down 都跑不动）：
+      # 未设置时传空值，由 JwtUtil 启动校验直接报错拒绝启动，而不是用仓库里的 key 静默签发
+      # 本地跑法：项目根目录建 .env（已被 .gitignore 忽略），参照 .env.example
+      - JWT_SECRET=${JWT_SECRET:-}
 
   # Frontend
   frontend:
