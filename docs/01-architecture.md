@@ -124,7 +124,7 @@ MyBatis-Plus Mapper 接口。
 - **FlashOrderProducer** — 秒杀下单消息生产者（syncSend 同步发送）
 - **RateLimitInterceptor** — 接口限流拦截器（Redis ZSET 滑动窗口）
 - **CaptchaService** — 算术验证码服务（生成 + 校验，Redis 存储，一次性消费）
-- **FlashOrderConsumer** — 秒杀下单消息消费者（终态标记 SETNX + DB messageKey 幂等 + Redisson 锁 + 事务扣库存+创建订单；业务终态失败吞没不重试、系统异常 re-throw 交给 MQ 重试，重试耗尽由 FlashOrderDeadLetterConsumer 补写 FAILED）
+- **FlashOrderConsumer** — 秒杀下单消息消费者（终态标记 SETNX + DB messageKey 幂等 + Redisson 锁 + 事务扣库存+创建订单；业务终态失败吞没不重试、系统异常 re-throw 交给 MQ 重试，重试耗尽由 FlashOrderDeadLetterConsumer 补写 FAILED；失败标记形如 `FAILED:原因`，轮询接口据此回传 `failReason`）
 
 ### flash-api（用户端 API，端口 8081）
 
@@ -238,7 +238,7 @@ sequenceDiagram
     loop 轮询直到 DONE / FAILED 或超时
         C->>API: GET /api/order/status?messageKey=
         API->>Redis: GET flash:msg:result:{messageKey}
-        API-->>C: 返回状态（PROCESSING / DONE / FAILED）
+        API-->>C: 返回状态（PROCESSING / DONE / FAILED + failReason）
     end
 ```
 
@@ -328,13 +328,20 @@ sequenceDiagram
 **白名单路径（无需 Token）：**
 
 ```
-/api/auth/register    — 用户注册
-/api/auth/login       — 用户登录
-/api/auth/refresh     — 刷新 Token
-/admin/auth/login     — 管理员登录
+/api/auth/register        — 用户注册
+/api/auth/login           — 用户登录
+/api/auth/refresh         — 刷新 Token
+/api/auth/captcha         — 验证码
+/admin/auth/login         — 管理员登录
+/admin/auth/captcha       — 管理员验证码
+/api/flash-sale/active    — 进行中的秒杀列表（游客可浏览）
+/api/flash-sale/{id}      — 秒杀详情（仅 GET 放行）
+/images/**                — 商品图片（前缀放行）
 ```
 
-**其他所有路径**均需在请求头中携带 `Authorization: Bearer <accessToken>`。
+**其他所有路径**均需在请求头中携带 `Authorization: Bearer <accessToken>`，缺失或无效返回 **401**。
+
+**注意有两道清单**：网关放行只代表请求能到 flash-api，flash-api 自己的 `ApiSecurityConfig` 还有一道 `permitAll`，两者必须同步维护。只改一处会造出「网关说公开、api 拒 403」的裂口——游客打不开 C 端首页与详情就是这么来的（2026-09-18 端到端实跑查出，非代码审查可见）。
 
 ### 身份信息传递
 
