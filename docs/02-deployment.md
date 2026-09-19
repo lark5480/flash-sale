@@ -38,15 +38,9 @@ docker compose up -d mysql redis nacos rocketmq-namesrv rocketmq-broker
 
 首次启动会拉取镜像，等待约 2-3 分钟。
 
-> **只起/停中间件不需要任何额外变量**（`docker compose up -d mysql redis …`、`docker compose down` 都不碰密钥）。
-> 但要用 Compose 起 api / admin / gateway 容器时，必须先提供签名密钥：docker profile 的 `jwt.secret` 是
-> `${JWT_SECRET}`，Compose 只透传，缺失时由 `JwtUtil` 在启动阶段直接报错（不会退回仓库里的 key 静默签发）。
->
-> ```bash
-> # 项目根目录复制样例后填值；.env 已被 .gitignore 忽略，不要提交
-> cp .env.example .env
-> # 生成一把：openssl rand -base64 48
-> ```
+> **本地全量启动无需任何额外变量**：`docker compose up -d` 与 `docker compose down` 开箱即用，docker profile 自带一把仅本地可用的默认签名 key（与 dev 同一把，开源 demo 的可接受边界）。
+> 真要部署时换成 prod profile（`${JWT_SECRET}` 无默认值，缺失即启动失败），或在 compose 里显式注入 `- JWT_SECRET=${JWT_SECRET}`，
+> 值来自 `.env`（已被忽略）或平台密钥服务，参考 `.env.example`。
 
 ### 2.2 验证中间件启动状态
 
@@ -80,11 +74,13 @@ docker exec flash-redis redis-cli ping
 
 ### 2.3 Nacos 命名空间初始化
 
-> **重要**：Nacos 启动后，需要手动创建一个命名空间，否则微服务无法注册。
+> **重要**：Nacos 启动后，需要先初始化管理员密码并手动创建一个命名空间，否则微服务无法注册。
 
 **操作步骤：**
-1. 访问 http://localhost:8848/nacos ，使用 `nacos / nacos` 登录
-2. 进入左侧菜单「命名空间」页面
+1. 访问 http://localhost:8848/nacos 。**Nacos 2.4+ 不再自带 `nacos / nacos` 账号**，首次访问会要求设置管理员密码——本项目按 `nacos / nacos` 设置即可（与 `application-dev.yml` / `application-docker.yml` 里的 `username/password` 一致）。
+   跳过这一步的后果：应用启动时报 `com.alibaba.nacos.api.exception.NacosException: user not found!`，看起来像密码配错，实际是服务端还没有任何用户。
+   > compose 已为 Nacos 挂了 `flash-nacos-data:/home/nacos/data`，所以**只需初始化一次**；此前没有数据卷时，内嵌 Derby 随容器一起消失，每次 `docker compose down` + `up` 都要重来一遍（命名空间与配置同样会丢）。
+2. 使用 `nacos / nacos` 登录，进入左侧菜单「命名空间」页面
 3. 点击「新建命名空间」
 4. **命名空间 ID** 填写（必须与配置一致）：
    ```

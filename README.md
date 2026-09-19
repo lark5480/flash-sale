@@ -74,7 +74,7 @@ flash-sale
   - blockHandler 返回"系统繁忙，请稍后重试"，fallback 兜底业务异常
   - Sentinel Dashboard（:8718）动态推送流控/熔断/热点规则
 - 验证码（算术题 + Redis 存储，一次性消费）
-- 签名密钥分环境边界：dev profile 用仓库内 key（只绑 127.0.0.1，本地/测试够用）；docker 与 prod profile 走 `${JWT_SECRET}`，代码里**不留兜底默认值**，`JwtUtil` 启动即校验（缺失或短于 32 字节直接拒绝启动，绝不退回公开 key 签发）。本地容器编排复制 `.env.example` 为 `.env` 填值即可（`.env` 已被忽略）
+- 签名密钥分环境边界：dev 与 docker profile 各带一把**仅本地可用**的默认 key（克隆下来零配置就能跑，开源 demo 的可接受取舍）；prod profile 走 `${JWT_SECRET}` 无默认值，且 `JwtUtil` 里不留任何代码兜底、启动即校验（缺失/空白/短于 32 字节直接拒绝启动，不会因为忘配而静默用公开 key 签发）。要换成真密钥：`- JWT_SECRET=${JWT_SECRET}` 注入或改走 prod，值放 `.env`（已忽略）或平台密钥服务，参考 `.env.example`
 - 密钥防泄露三道闸：本地 pre-commit 钩子（启用：`git config core.hooksPath scripts/git-hooks`）→ CI `secret-scan` job 扫提交历史（gitleaks，`--redact`）→ `.gitignore` 覆盖 `.env` 与压测产物。注意 gitleaks 抓不到配置里的低熵口令，"扫描通过"不等于"仓库里没有明文密钥"
 - 异常分类处理（业务异常吞没，系统异常 re-throw 触发 MQ 重试）
 

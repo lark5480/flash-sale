@@ -60,6 +60,10 @@ services:
       - TZ=Asia/Shanghai
       - JVM_XMS=256m
       - JVM_XMX=256m
+    volumes:
+      # 内嵌 Derby 默认写在容器文件系统里：不挂卷则每次 down+up 都会丢管理员账号、
+      # 命名空间与配置，逼人去控制台重新初始化一次密码（Nacos 2.4+ 不再自带 nacos/nacos）
+      - flash-nacos-data:/home/nacos/data
 
   rocketmq-namesrv:
     image: apache/rocketmq:5.3.0
@@ -106,10 +110,8 @@ services:
       - "8080:8080"
     environment:
       - SPRING_PROFILES_ACTIVE=docker
-      # 签名密钥不进仓库。这里只做透传（不在 Compose 层用 :? 卡住，否则连 down 都跑不动）：
-      # 未设置时传空值，由 JwtUtil 启动校验直接报错拒绝启动，而不是用仓库里的 key 静默签发
-      # 本地跑法：项目根目录建 .env（已被 .gitignore 忽略），参照 .env.example
-      - JWT_SECRET=${JWT_SECRET:-}
+      # 不注入 JWT_SECRET：docker profile 自带一把仅本地可用的默认 key，开箱即跑。
+      # 想换成真密钥就在这里加 - JWT_SECRET=${JWT_SECRET}，或直接改用 prod profile（那里无默认值，缺失即启动失败）。
 
   api:
     build:
@@ -132,10 +134,8 @@ services:
     #   - "8081:8081"
     environment:
       - SPRING_PROFILES_ACTIVE=docker
-      # 签名密钥不进仓库。这里只做透传（不在 Compose 层用 :? 卡住，否则连 down 都跑不动）：
-      # 未设置时传空值，由 JwtUtil 启动校验直接报错拒绝启动，而不是用仓库里的 key 静默签发
-      # 本地跑法：项目根目录建 .env（已被 .gitignore 忽略），参照 .env.example
-      - JWT_SECRET=${JWT_SECRET:-}
+      # 不注入 JWT_SECRET：docker profile 自带一把仅本地可用的默认 key，开箱即跑。
+      # 想换成真密钥就在这里加 - JWT_SECRET=${JWT_SECRET}，或直接改用 prod profile（那里无默认值，缺失即启动失败）。
 
   admin:
     build:
@@ -157,10 +157,8 @@ services:
     #   - "8082:8082"
     environment:
       - SPRING_PROFILES_ACTIVE=docker
-      # 签名密钥不进仓库。这里只做透传（不在 Compose 层用 :? 卡住，否则连 down 都跑不动）：
-      # 未设置时传空值，由 JwtUtil 启动校验直接报错拒绝启动，而不是用仓库里的 key 静默签发
-      # 本地跑法：项目根目录建 .env（已被 .gitignore 忽略），参照 .env.example
-      - JWT_SECRET=${JWT_SECRET:-}
+      # 不注入 JWT_SECRET：docker profile 自带一把仅本地可用的默认 key，开箱即跑。
+      # 想换成真密钥就在这里加 - JWT_SECRET=${JWT_SECRET}，或直接改用 prod profile（那里无默认值，缺失即启动失败）。
 
   # Frontend
   frontend:
@@ -229,6 +227,7 @@ services:
 
 volumes:
   flash-mysql-data:
+  flash-nacos-data:
   flash-redis-data:
   flash-rocketmq-logs:
   flash-rocketmq-store:

@@ -25,7 +25,9 @@ mybatis-plus:
     log-impl: org.apache.ibatis.logging.slf4j.Slf4jImpl
 
 jwt:
-  secret: ${JWT_SECRET}
+  # 本地/容器编排零配置可用：默认值与 dev 同一把仅本地 key（开源 demo 的可接受边界）。
+  # 真部署走 prod profile，那里 ${JWT_SECRET} 无默认值，缺失即启动失败。
+  secret: ${JWT_SECRET:flash-sale-secret-key-min-256-bits-long-for-hs256}
   expiration: 1800000
   refresh-expiration: 604800000
 
