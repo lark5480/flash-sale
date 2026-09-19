@@ -1,0 +1,40 @@
+#!/bin/sh
+# 提交前密钥门禁：把凭据拦在入库之前（CI 那道是兜底，本地这道更早也更省事后轮转）。
+#
+# 每个克隆启用一次：
+#   git config core.hooksPath scripts/git-hooks
+#
+# 找不到 gitleaks 原生二进制时退回 Docker 镜像；两者都没有就只告警放行，
+# 绝不因为工具缺失卡住别人的提交（要硬拦交给 CI 的 secret-scan job）。
+# 确认误报要临时绕过：git commit --no-verify
+
+set -u
+
+ROOT=$(git rev-parse --show-toplevel 2>/dev/null) || exit 0
+
+if command -v gitleaks >/dev/null 2>&1; then
+    gitleaks protect --staged -s "$ROOT" --no-banner --redact --exit-code 1 && exit 0
+    echo "pre-commit: 暂存区发现疑似密钥，提交已中止（误报可用 git commit --no-verify 跳过）" >&2
+    exit 1
+fi
+
+if command -v docker >/dev/null 2>&1; then
+    # Git Bash 会把 /xxx 参数改写成 Windows 路径，挂载与传参都要绕开这层转换
+    if command -v cygpath >/dev/null 2>&1; then
+        ROOT=$(cygpath -m "$ROOT")
+    fi
+    MSYS_NO_PATHCONV=1 docker run --rm \
+        -e GIT_CONFIG_COUNT=1 -e GIT_CONFIG_KEY_0=safe.directory -e 'GIT_CONFIG_VALUE_0=*' \
+        -v "$ROOT:/repo" ghcr.io/gitleaks/gitleaks:v8.21.2 \
+        protect --staged -s /repo --no-banner --redact --exit-code 1 && exit 0
+    STATUS=$?
+    if [ "$STATUS" -eq 1 ]; then
+        echo "pre-commit: 暂存区发现疑似密钥，提交已中止（误报可用 git commit --no-verify 跳过）" >&2
+        exit 1
+    fi
+    echo "pre-commit: gitleaks 运行异常（退出码 $STATUS），本次放行，CI 的 secret-scan 仍会兜底" >&2
+    exit 0
+fi
+
+echo "pre-commit: 未找到 gitleaks 或 docker，跳过密钥扫描（建议安装其一，CI 侧门禁仍在）" >&2
+exit 0
