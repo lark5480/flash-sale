@@ -5,6 +5,8 @@ import com.flashsale.common.exception.ForbiddenException;
 import com.flashsale.common.exception.UnauthorizedException;
 import com.flashsale.common.result.ResultCode;
 import com.flashsale.common.result.ResultVO;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpStatus;
 import org.springframework.validation.FieldError;
 import org.springframework.web.bind.MethodArgumentNotValidException;
@@ -16,6 +18,8 @@ import java.util.stream.Collectors;
 
 @RestControllerAdvice
 public class GlobalExceptionHandler {
+
+    private static final Logger log = LoggerFactory.getLogger(GlobalExceptionHandler.class);
 
     @ExceptionHandler(BusinessException.class)
     @ResponseStatus(HttpStatus.OK)
@@ -47,6 +51,7 @@ public class GlobalExceptionHandler {
     @ExceptionHandler(Exception.class)
     @ResponseStatus(HttpStatus.INTERNAL_SERVER_ERROR)
     public ResultVO<Void> handleException(Exception e) {
-        return ResultVO.fail(ResultCode.SYSTEM_ERROR.getCode(), e.getMessage());
+        log.error("未预期的服务端异常", e);
+        return ResultVO.fail(ResultCode.SYSTEM_ERROR);
     }
 }

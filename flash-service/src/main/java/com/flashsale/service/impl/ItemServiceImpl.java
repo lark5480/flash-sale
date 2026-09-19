@@ -70,11 +70,11 @@ public class ItemServiceImpl implements ItemService {
     @Override
     public Item updateItem(Item item) {
         if (item == null || item.getId() == null) {
-            throw new BusinessException(ResultCode.BAD_REQUEST, "item id is required");
+            throw new BusinessException(ResultCode.BAD_REQUEST, "缺少商品 ID");
         }
         Item existing = itemMapper.selectById(item.getId());
         if (existing == null) {
-            throw new BusinessException(ResultCode.NOT_FOUND, "item not found");
+            throw new BusinessException(ResultCode.NOT_FOUND, "商品不存在");
         }
         // 上架商品不可直接编辑：上架商品可能正被待开始/进行中的秒杀活动引用并展示在 C 端货架，
         // 直接改名/图/价会造成售卖中商品资料突变。平台惯例：修改商品资料需先下架。
@@ -91,7 +91,7 @@ public class ItemServiceImpl implements ItemService {
     public void deleteItem(Long id) {
         Item existing = itemMapper.selectById(id);
         if (existing == null) {
-            throw new BusinessException(ResultCode.NOT_FOUND, "item not found");
+            throw new BusinessException(ResultCode.NOT_FOUND, "商品不存在");
         }
         if (Integer.valueOf(1).equals(existing.getStatus())) {
             throw new BusinessException(ResultCode.BAD_REQUEST, "上架商品不可删除，请先下架后再删除");
@@ -111,11 +111,11 @@ public class ItemServiceImpl implements ItemService {
     @Override
     public void changeStatus(Long id, Integer status) {
         if (status == null || (!status.equals(0) && !status.equals(1))) {
-            throw new BusinessException(ResultCode.BAD_REQUEST, "status must be 0(下架) or 1(上架)");
+            throw new BusinessException(ResultCode.BAD_REQUEST, "状态只能是 0（下架）或 1（上架）");
         }
         Item existing = itemMapper.selectById(id);
         if (existing == null) {
-            throw new BusinessException(ResultCode.NOT_FOUND, "item not found");
+            throw new BusinessException(ResultCode.NOT_FOUND, "商品不存在");
         }
         // 下架拦截：商品仍被待开始/进行中的秒杀活动引用时不允许下架，
         // 避免出现「秒杀货架还在售卖已下架商品」的中间态
@@ -181,7 +181,7 @@ public class ItemServiceImpl implements ItemService {
 
             // 判断是否为空值标记
             if (RedisConstants.CACHE_NULL.equals(json)) {
-                throw new BusinessException(ResultCode.NOT_FOUND, "item not found");
+                throw new BusinessException(ResultCode.NOT_FOUND, "商品不存在");
             }
 
             return objectMapper.readValue(json, Item.class);

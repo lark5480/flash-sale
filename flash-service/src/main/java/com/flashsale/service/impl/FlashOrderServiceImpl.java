@@ -86,7 +86,7 @@ public class FlashOrderServiceImpl implements FlashOrderService {
     public FlashOrder getOrderById(Long id) {
         FlashOrder order = flashOrderMapper.selectById(id);
         if (order == null) {
-            throw new BusinessException(ResultCode.NOT_FOUND, "order not found");
+            throw new BusinessException(ResultCode.NOT_FOUND, "订单不存在");
         }
         return order;
     }
@@ -437,7 +437,7 @@ public class FlashOrderServiceImpl implements FlashOrderService {
         // 乐观锁扣库存
         int updated = flashSaleMapper.deductStock(flashSaleId);
         if (updated == 0) {
-            throw new BusinessException(ResultCode.FLASH_SOLD_OUT, "DB 库存不足");
+            throw new BusinessException(ResultCode.FLASH_SOLD_OUT, "库存不足，请刷新后重试");
         }
 
         // 生成雪花 ID + 创建订单（同一事务，失败则 deductStock 一并回滚）

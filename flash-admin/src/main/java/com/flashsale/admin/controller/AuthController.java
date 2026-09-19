@@ -34,7 +34,7 @@ public class AuthController {
         }
         UserVO userVO = userService.getUserByUsername(loginDTO.getUsername());
         if (!"ADMIN".equals(userVO.getRole())) {
-            return ResultVO.fail(403, "admin access required");
+            return ResultVO.fail(403, "需要管理员权限");
         }
         LoginVO loginVO = userService.login(loginDTO);
         return ResultVO.success(loginVO);
