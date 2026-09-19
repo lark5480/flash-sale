@@ -55,6 +55,7 @@ public class FlashOrderDeadLetterConsumer implements RocketMQListener<FlashOrder
                 message.getItemId(), message.getFlashPrice());
         flashSaleMetrics.recordOrderFail(OrderFailReason.DEAD_LETTER);
         flashSaleMetrics.recordConsume(ConsumeResult.DEAD_LETTER);
-        flashOrderSettler.settleAndRelease(message, RocketMQConstants.RESULT_FAILED);
+        flashOrderSettler.settleAndRelease(message,
+                RocketMQConstants.failedMarker("处理多次重试仍失败，请重新下单"));
     }
 }

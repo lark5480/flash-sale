@@ -39,7 +39,7 @@ public class UserServiceImpl implements UserService {
         LambdaQueryWrapper<User> wrapper = new LambdaQueryWrapper<>();
         wrapper.eq(User::getUsername, dto.getUsername());
         if (userMapper.selectCount(wrapper) > 0) {
-            throw new BusinessException(ResultCode.BAD_REQUEST, "username already exists");
+            throw new BusinessException(ResultCode.BAD_REQUEST, "用户名已被占用");
         }
         User user = new User();
         user.setUsername(dto.getUsername());
@@ -58,10 +58,10 @@ public class UserServiceImpl implements UserService {
         wrapper.eq(User::getUsername, dto.getUsername());
         User user = userMapper.selectOne(wrapper);
         if (user == null || !passwordUtil.matches(dto.getPassword(), user.getPassword())) {
-            throw new BusinessException(ResultCode.UNAUTHORIZED, "invalid username or password");
+            throw new BusinessException(ResultCode.UNAUTHORIZED, "用户名或密码错误");
         }
         if (user.getStatus() != null && user.getStatus() == 0) {
-            throw new BusinessException(ResultCode.FORBIDDEN, "account disabled");
+            throw new BusinessException(ResultCode.FORBIDDEN, "账号已被禁用");
         }
         String accessToken = jwtUtil.generateToken(user.getId(), user.getRole());
         String refreshToken = jwtUtil.generateRefreshToken(user.getId());
@@ -72,7 +72,7 @@ public class UserServiceImpl implements UserService {
     public UserVO getUserById(Long userId) {
         User user = userMapper.selectById(userId);
         if (user == null) {
-            throw new BusinessException(ResultCode.NOT_FOUND, "user not found");
+            throw new BusinessException(ResultCode.NOT_FOUND, "用户不存在");
         }
         return UserVO.from(user);
     }
@@ -83,7 +83,7 @@ public class UserServiceImpl implements UserService {
         wrapper.eq(User::getUsername, username);
         User user = userMapper.selectOne(wrapper);
         if (user == null) {
-            throw new BusinessException(ResultCode.NOT_FOUND, "user not found");
+            throw new BusinessException(ResultCode.NOT_FOUND, "用户不存在");
         }
         return UserVO.from(user);
     }
@@ -99,7 +99,7 @@ public class UserServiceImpl implements UserService {
     public void updateStatus(Long userId, Integer status) {
         User user = userMapper.selectById(userId);
         if (user == null) {
-            throw new BusinessException(ResultCode.NOT_FOUND, "user not found");
+            throw new BusinessException(ResultCode.NOT_FOUND, "用户不存在");
         }
         user.setStatus(status);
         userMapper.updateById(user);
@@ -112,19 +112,19 @@ public class UserServiceImpl implements UserService {
         try {
             userId = jwtUtil.getUserId(refreshToken);
         } catch (Exception e) {
-            throw new BusinessException(ResultCode.UNAUTHORIZED, "invalid refresh token");
+            throw new BusinessException(ResultCode.UNAUTHORIZED, "登录凭证无效，请重新登录");
         }
         if (jwtUtil.isTokenExpired(refreshToken)) {
-            throw new BusinessException(ResultCode.UNAUTHORIZED, "refresh token expired");
+            throw new BusinessException(ResultCode.UNAUTHORIZED, "登录已过期，请重新登录");
         }
 
         // 查询用户状态
         User user = userMapper.selectById(userId);
         if (user == null) {
-            throw new BusinessException(ResultCode.UNAUTHORIZED, "user not found");
+            throw new BusinessException(ResultCode.UNAUTHORIZED, "用户不存在");
         }
         if (user.getStatus() != null && user.getStatus() == 0) {
-            throw new BusinessException(ResultCode.FORBIDDEN, "account disabled");
+            throw new BusinessException(ResultCode.FORBIDDEN, "账号已被禁用");
         }
 
         // 颁发新 accessToken

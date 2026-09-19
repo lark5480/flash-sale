@@ -25,12 +25,13 @@ public interface FlashOrderService {
 
     IPage<FlashOrder> listAllOrders(long page, long size);
 
-    long countByUserAndFlashSale(Long userId, Long flashSaleId);
-
     FlashOrderVO purchase(Long flashSaleId, Long userId);
 
-    /** 查询订单处理状态（基于 MQ 消息幂等键） */
-    String getOrderStatus(String messageKey);
+    /**
+     * 读取 MQ 处理结果标记原值（{@code DONE} / {@code FAILED:原因} / {@code FAILED}），
+     * 键不存在表示仍在处理。状态与原因请用 {@code RocketMQConstants.statusOf / failReasonOf} 解析。
+     */
+    String getProcessingMarker(String messageKey);
 
     /** 查询超时未支付的待支付订单 */
     List<FlashOrder> getExpiredPendingOrders(int timeoutMinutes);

@@ -21,7 +21,8 @@
 | 熔断降级 | Sentinel 1.8.8（@SentinelResource 业务层限流/熔断） |
 | 前端 | Vue 3 + Vite + Element Plus (管理端) |
 | 部署 | Docker Compose（14 服务编排） |
-| CI | GitHub Actions（Maven 构建 + Artifact 上传） |
+| 测试 | JUnit 5 + AssertJ + Mockito；Testcontainers 起真实 Redis 验证库存 Lua（49 个用例） |
+| CI | GitHub Actions（`mvn -B clean verify`：测试 + 构建 + Artifact 上传） |
 
 ## 项目结构
 
@@ -62,6 +63,7 @@ flash-sale
 - 用户列表 + 启用/禁用
 
 ### 安全防护
+- 鉴权两道清单必须同步：网关 `AuthGlobalFilter`（放行注册/登录/验证码、`/images/**`、以及游客可浏览的秒杀列表与 GET 详情）+ flash-api `ApiSecurityConfig` 的 `permitAll`。网关放行只代表请求能到下游，api 仍会二次判定；只改一处会出现「网关说公开、api 拒 403」。返回码：**未登录 401、权限不足 403**。下单/订单类接口一律要求登录（游客能看不能买）
 - 接口限流（@RateLimit 注解 + Redis ZSET 滑动窗口）—— **控制层限流**
   - 秒杀下单：5 次 / 5 秒
   - C 端登录：5 次 / 60 秒
@@ -72,13 +74,15 @@ flash-sale
   - blockHandler 返回"系统繁忙，请稍后重试"，fallback 兜底业务异常
   - Sentinel Dashboard（:8718）动态推送流控/熔断/热点规则
 - 验证码（算术题 + Redis 存储，一次性消费）
-- JWT 密钥生产环境走环境变量 ${JWT_SECRET}
+- 签名密钥分环境边界：dev 与 docker profile 各带一把**仅本地可用**的默认 key（克隆下来零配置就能跑，开源 demo 的可接受取舍）；prod profile 走 `${JWT_SECRET}` 无默认值，且 `JwtUtil` 里不留任何代码兜底、启动即校验（缺失/空白/短于 32 字节直接拒绝启动，不会因为忘配而静默用公开 key 签发）。要换成真密钥：`- JWT_SECRET=${JWT_SECRET}` 注入或改走 prod，值放 `.env`（已忽略）或平台密钥服务，参考 `.env.example`
+- 密钥防泄露三道闸：本地 pre-commit 钩子（启用：`git config core.hooksPath scripts/git-hooks`）→ CI `secret-scan` job 扫提交历史（gitleaks，`--redact`）→ `.gitignore` 覆盖 `.env` 与压测产物。注意 gitleaks 抓不到配置里的低熵口令，"扫描通过"不等于"仓库里没有明文密钥"
 - 异常分类处理（业务异常吞没，系统异常 re-throw 触发 MQ 重试）
 
 ### 消息可靠性
 - RocketMQ Broker `flushDiskType = SYNC_FLUSH`（同步刷盘，消息不丢）
 - Consumer `maxReconsumeTimes = 3`（重试 3 次后进死信队列）
-- 死信队列消费者 `FlashOrderDeadLetterConsumer` 记录重试耗尽消息，供人工补偿
+- 死信队列消费者 `FlashOrderDeadLetterConsumer` 记录重试耗尽消息供人工补偿，并补写 `FAILED:原因` 终态标记，避免客户端永远轮询到 PROCESSING
+- 业务终态失败写 `FAILED:原因`（如「已达每人限购数量」），`/api/order/status` 解出 `status` + `failReason` 回传前端
 - Broker 原生 Prometheus 指标导出（端口 5557）
 
 ### 可观测性
@@ -88,15 +92,14 @@ flash-sale
   - Prometheus（:9090）拉取指标，Grafana（:3000，admin/admin）可视化大盘
   - Dashboard 自动加载（Provisioning）：数据源 + 看板 JSON 版本控制，重启不丢失
   - Dashboard：JVM 堆内存 / GC / CPU / HTTP QPS & P99 / 下单成功失败 & QPS & 成功率
-  - ⚠️ 关键配置：`management.metrics.distribution.percentiles-histogram.http.server.requests: true`（暴露 `_bucket` 指标，否则 P99 计算为 "No data"）
-  - ⚠️ 后端跑在宿主机：`docker/prometheus/prometheus.yml` 的 targets 已默认指向 `host.docker.internal:8081` / `8082` / `8080`；若改为全容器部署（api/admin/gateway 也进 Compose），需把对应 target 改回容器名 `api:8081` / `admin:8082` / `gateway:8080`
+  - ⚠️ 两个部署关键坑（P99 依赖 `_bucket` 直方图开关、Prometheus 抓取地址随宿主机/全容器部署切换）详见[可观测性](docs/architecture/observability.md)与[全量容器化部署](docs/deployment/full-container.md)
 
 ### 自动化
 - 秒杀活动状态自动流转（定时任务：待开始 -> 进行中 -> 已结束）
 - 订单超时自动取消（15 分钟未支付，自动归还 DB + Redis 库存，递减用户购买计数）
 - Token 刷新
 - 启动时自动初始化默认管理员账号（admin / admin123）
-- GitHub Actions CI：push 到 master/dev 自动构建，产物上传 Artifact
+- GitHub Actions CI：push 到 master/dev 自动跑 `mvn -B clean verify`（测试 + 构建），产物上传 Artifact
 
 ### 缓存策略
 - **三级缓存**：L1 Caffeine（秒级 TTL）→ L2 Redis（分钟级 TTL）→ DB 兜底回源，活动列表同样走三级缓存
@@ -118,41 +121,41 @@ flash-sale
 
 ## 快速启动
 
-### 方式一：Docker Compose 一键部署（推荐）
+### 方式一：Docker Compose 全量部署（本项目未采用，日常请用方式二）
+
+compose 文件按「**只用 Docker 起中间件**」维护，后端/前端容器这一段保留着但**不保证可用**：全量启动当前已知有 5 处卡点（Compose bake 构建 panic、broker 注册地址、前端 nginx 未反代、Nacos 全新实例初始化、Rancher/WSL2 宿主端口转发失效），其中最后一道属虚拟化层网络、不在仓库能解决范围内。
+
+> 逐项结论、绕法与命令顺序已归档到[全量容器化部署](docs/deployment/full-container.md)，此处不再展开。日常开发请用方式二。
+
+### 方式二：本地手动启动（日常开发用这个）
+
+中间件用 Docker，后端与前端在宿主机跑 —— 秒杀全链路（下单 → Redis 预扣 → MQ → 消费落库 → 取消归还 → 重试与死信）已在此形态下完整验证过。
+
+#### 1. 启动中间件
 
 ```bash
-# 1. 构建前端产物（Docker 后端镜像会自动编译）
-cd flash-frontend && npm install && npm run build && cd ..
-cd flash-admin-frontend && npm install && npm run build && cd ..
+docker compose up -d mysql redis nacos rocketmq-namesrv rocketmq-broker
+```
 
-# 2. 一键启动（中间件 + 后端 + 前端）
-docker compose up -d
+#### 2. 初始化数据库
 
-# 3. 初始化数据库表
+```bash
+# 数据在 flash-mysql-data 卷里，建过一次即可（`down -v` 之后要重来）
 docker compose exec -T mysql mysql -uroot -proot123 flash_sale < sql/init.sql
 ```
 
-> 前端产品构建一次即可，后续修改前端代码需要重新 `npm run build`。
-> 若只需中间件（本地开发后端），运行：`docker compose up -d mysql redis nacos rocketmq-namesrv rocketmq-broker`
-> 启动监控栈：`docker compose up -d prometheus grafana node-exporter sentinel-dashboard`
-
-### 方式二：本地手动启动
-
-#### 1. 初始化数据库
+#### 3. 初始化 Nacos 管理员账号（仅全新卷需要）
 
 ```bash
-mysql -u root -p < sql/init.sql
+# 报 user not found! 时才执行；数据在 flash-nacos-data 卷里，普通 down/up 不会丢
+docker exec flash-nacos sh -c 'wget -q -O- -T 6 --post-data="password=nacos" http://127.0.0.1:8848/nacos/v1/auth/admin'
 ```
 
-#### 2. 启动中间件
-
-确保 MySQL、Redis、Nacos、RocketMQ 均已启动。
-
-#### 3. 启动后端服务
+#### 4. 启动后端服务
 
 ```bash
-# 编译
-mvn clean package -DskipTests
+# 编译（跑全部后端测试；无 Docker 时真实 Redis 的集成测试整类跳过）
+mvn clean verify
 
 # 按顺序启动（网关最后）
 java -jar flash-api/target/flash-api-1.0.0.jar
@@ -160,7 +163,7 @@ java -jar flash-admin/target/flash-admin-1.0.0.jar
 java -jar flash-gateway/target/flash-gateway-1.0.0.jar
 ```
 
-#### 4. 启动前端
+#### 5. 启动前端
 
 ```bash
 # 用户端
@@ -170,13 +173,14 @@ cd flash-frontend && npm install && npm run dev
 cd flash-admin-frontend && npm install && npm run dev
 ```
 
-### 5. 访问
+#### 6. 访问
 
 | 服务 | 地址 |
 |------|------|
 | 网关（统一入口） | http://localhost:8080 |
 | 用户端前端 | http://localhost:5173 |
 | 管理端前端 | http://localhost:5174 |
+| Nacos 控制台 | http://localhost:8848/nacos（`nacos/nacos`，需已完成第 3 步） |
 | Prometheus | http://localhost:9090 |
 | Grafana | http://localhost:3000（admin/admin） |
 | Sentinel Dashboard | http://localhost:8718 |
@@ -195,10 +199,10 @@ cd flash-admin-frontend && npm install && npm run dev
 | GET | /api/auth/captcha | 获取验证码 | 否 |
 | GET | /api/item/list | 商品列表 | 是 |
 | GET | /api/item/{id} | 商品详情 | 是 |
-| GET | /api/flash-sale/active | 进行中的秒杀活动 | 是 |
-| GET | /api/flash-sale/{id} | 秒杀活动详情 | 是 |
+| GET | /api/flash-sale/active | 进行中的秒杀活动 | 否（游客可浏览） |
+| GET | /api/flash-sale/{id} | 秒杀活动详情 | 否（仅 GET，游客可浏览） |
 | POST | /api/flash-sale/{id}/purchase | 秒杀下单（需验证码） | 是 |
-| GET | /api/order/status?messageKey= | 轮询订单状态 | 是 |
+| GET | /api/order/status?messageKey= | 轮询订单状态（PROCESSING / DONE / FAILED + `failReason`） | 是 |
 | GET | /api/order/list?page=1&size=10&status=&keyword= | 我的订单（分页 + 状态筛选 + 关键词搜索） | 是 |
 | GET | /api/order/{id} | 订单详情 | 是 |
 | POST | /api/order/{id}/pay | 支付订单 | 是 |
@@ -236,16 +240,28 @@ RocketMQ 异步发送下单消息
     ↓
 Consumer 消费：幂等校验 → 分布式锁 → DB 乐观锁扣库存 → 创建订单
     ↓
-客户端轮询 /order/status 获取结果
+客户端轮询 /order/status 获取结果（失败时带 failReason）
 ```
 
 ## 文档
 
-| 文档 | 说明 |
+文档已拆为按主题的 wiki 结构（可用 VitePress 构建为带侧栏与全文搜索的文档站，见下方）：
+
+| 分区 | 页面 |
 |------|------|
-| [01-架构概览](docs/01-architecture.md) | 系统架构、模块职责、核心链路、数据设计、安全认证 |
-| [02-部署指南](docs/02-deployment.md) | 中间件 Docker 配置、数据库初始化、服务启动、常见问题排查 |
-| [03-开发指南](docs/03-development.md) | API 接口文档、包结构规范、枚举值、代码规范、前端开发 |
+| **架构** | [系统总览](docs/architecture/overview.md) · [秒杀下单核心链路](docs/architecture/flash-sale-flow.md) · [数据设计](docs/architecture/data-design.md) · [安全与认证](docs/architecture/security.md) · [可观测性](docs/architecture/observability.md) · [定时任务与消费者隔离](docs/architecture/scheduling-and-isolation.md) |
+| **部署** | [本地开发部署](docs/deployment/local.md) · [常见问题排查](docs/deployment/troubleshooting.md) · [全量容器化部署](docs/deployment/full-container.md) |
+| **开发** | [模块依赖与包结构](docs/development/structure.md) · [API 接口文档](docs/development/api-reference.md) · [统一返回与枚举](docs/development/response-and-enums.md) · [Redis Lua 脚本](docs/development/redis-lua.md) · [RocketMQ 消息机制](docs/development/rocketmq.md) · [前端开发](docs/development/frontend.md) · [代码规范](docs/development/code-standards.md) · [测试](docs/development/testing.md) |
+| **知识笔记** | [知识笔记与面试 Q&A](docs/notes/interview-qa.md) |
+| **贡献** | [CONTRIBUTING](CONTRIBUTING.md)：本地跑起、分支/提交策略、测试与密钥门禁、版本冻结约束 |
+
+### 本地预览文档站（VitePress）
+
+```bash
+npm install          # 安装 vitepress（仅文档站需要）
+npm run docs:dev     # 本地预览 http://localhost:5173
+npm run docs:build   # 构建静态站点到 docs/.vitepress/dist
+```
 
 ## 姊妹项目：跨服务数据一致性
 

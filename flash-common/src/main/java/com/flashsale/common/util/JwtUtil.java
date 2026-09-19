@@ -3,6 +3,7 @@ package com.flashsale.common.util;
 import io.jsonwebtoken.Claims;
 import io.jsonwebtoken.Jwts;
 import io.jsonwebtoken.security.Keys;
+import jakarta.annotation.PostConstruct;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 
@@ -19,7 +20,10 @@ import java.util.Date;
 @Component
 public class JwtUtil {
 
-    @Value("${jwt.secret:flash-sale-secret-key-min-256-bits-long-for-hs256}")
+    /** HS256 要求密钥不短于 256 bit（32 字节），由 RFC 7518 规定 */
+    private static final int MIN_SECRET_BYTES = 32;
+
+    @Value("${jwt.secret}")
     private String secret;
 
     /** Access Token 有效期（毫秒），默认 30 分钟 */
@@ -29,6 +33,26 @@ public class JwtUtil {
     /** Refresh Token 有效期（毫秒），默认 7 天 */
     @Value("${jwt.refresh-expiration:604800000}")
     private long refreshExpiration;
+
+    /**
+     * 启动即校验签名密钥。
+     * <p>
+     * 密钥只在签发/验签时才被读取，若不在此处拦截，配置为空的应用也能正常启动，
+     * 直到第一个登录请求才炸——而 {@code hmacShaKeyFor} 对短密钥的行为又不一致，
+     * 等于把「配置漏了」变成线上事故。缺失或不足 32 字节一律拒绝启动。
+     */
+    @PostConstruct
+    void validateSecret() {
+        if (secret == null || secret.trim().isEmpty()) {
+            throw new IllegalStateException("jwt.secret 未配置：请通过环境变量 JWT_SECRET 注入一把随机密钥"
+                    + "（本地跑法见 .env.example，容器编排见 docker-compose.yml）");
+        }
+        if (secret.getBytes(StandardCharsets.UTF_8).length < MIN_SECRET_BYTES) {
+            throw new IllegalStateException("jwt.secret 长度不足：HS256 至少需要 "
+                    + MIN_SECRET_BYTES + " 字节随机密钥，当前为 "
+                    + secret.getBytes(StandardCharsets.UTF_8).length + " 字节");
+        }
+    }
 
     private SecretKey getSecretKey() {
         return Keys.hmacShaKeyFor(secret.getBytes(StandardCharsets.UTF_8));

@@ -88,7 +88,7 @@ public class FlashSaleServiceImpl implements FlashSaleService {
     public FlashSale updateFlashSale(FlashSale flashSale) {
         FlashSale existing = flashSaleMapper.selectById(flashSale.getId());
         if (existing == null) {
-            throw new BusinessException(ResultCode.NOT_FOUND, "flash sale not found");
+            throw new BusinessException(ResultCode.NOT_FOUND, "秒杀活动不存在");
         }
         validateTimeRange(flashSale);
         checkEditAllowed(existing, flashSale);
@@ -185,7 +185,7 @@ public class FlashSaleServiceImpl implements FlashSaleService {
     public void deleteFlashSale(Long id) {
         FlashSale existing = flashSaleMapper.selectById(id);
         if (existing == null) {
-            throw new BusinessException(ResultCode.NOT_FOUND, "flash sale not found");
+            throw new BusinessException(ResultCode.NOT_FOUND, "秒杀活动不存在");
         }
         // 进行中在售、已结束归档的活动删除会破坏台账，仅允许清理未开始/已取消的场次
         if (existing.getStatus() != null
@@ -203,7 +203,7 @@ public class FlashSaleServiceImpl implements FlashSaleService {
     public FlashSale getFlashSaleById(Long id) {
         FlashSale flashSale = flashSaleMapper.selectById(id);
         if (flashSale == null) {
-            throw new BusinessException(ResultCode.NOT_FOUND, "flash sale not found");
+            throw new BusinessException(ResultCode.NOT_FOUND, "秒杀活动不存在");
         }
         return flashSale;
     }
@@ -275,7 +275,7 @@ public class FlashSaleServiceImpl implements FlashSaleService {
     public void updateStatus(Long id, Integer status) {
         FlashSale flashSale = flashSaleMapper.selectById(id);
         if (flashSale == null) {
-            throw new BusinessException(ResultCode.NOT_FOUND, "flash sale not found");
+            throw new BusinessException(ResultCode.NOT_FOUND, "秒杀活动不存在");
         }
         FlashSaleStatusEnum current = FlashSaleStatusEnum.codeOf(flashSale.getStatus());
         FlashSaleStatusEnum target = FlashSaleStatusEnum.codeOf(status);
@@ -402,7 +402,7 @@ public class FlashSaleServiceImpl implements FlashSaleService {
 
             // 判断是否为空值标记
             if (RedisConstants.CACHE_NULL.equals(json)) {
-                throw new BusinessException(ResultCode.NOT_FOUND, "flash sale not found");
+                throw new BusinessException(ResultCode.NOT_FOUND, "秒杀活动不存在");
             }
 
             FlashSaleVO vo = objectMapper.readValue(json, FlashSaleVO.class);

@@ -50,7 +50,7 @@ flash-gateway → flash-common（排除 web/tomcat/mybatis/validation 等重量�
 3. 分布式锁使用 Redisson（RLock）
 4. 定时任务使用 @Scheduled（在 flash-admin 中，如 FlashSaleScheduler）
 5. 服务发现使用 Nacos，网关使用 Spring Cloud Gateway
-6. 认证使用 Spring Security + JWT，网关层 AuthGlobalFilter 做统一鉴权
+6. 认证使用 Spring Security + JWT，网关层 AuthGlobalFilter 做统一鉴权。★ 鉴权清单有**两处**：网关 `AuthGlobalFilter` 与 flash-api 的 `ApiSecurityConfig`，只改一处会造出「网关说公开、api 拒 403」的裂口（游客打不开 C 端首页即此因）。返回码口径：无有效凭据 401、权限不足 403
 7. 接口限流使用 @RateLimit 注解 + Redis ZSET 滑动窗口（RateLimitInterceptor），登录/注册/秒杀/管理端均有限流
 8. 验证码使用 CaptchaService（算术题 + Redis 存储），登录和秒杀下单需校验
 9. Consumer 异常处理：BusinessException（售罄）吞没不重试，系统异常 re-throw 触发 RocketMQ 重试
@@ -62,6 +62,7 @@ flash-gateway → flash-common（排除 web/tomcat/mybatis/validation 等重量�
   - 本地开发（后端跑宿主机、中间件与监控容器化）：`host.docker.internal:8081` / `host.docker.internal:8082`
   - 全量容器化部署（后端在 Compose 内）：改回容器名 `api:8081` / `admin:8082`，并放开 docker-compose.yml 中 api/admin 的宿主端口映射注释
   - 改完 `docker/prometheus/prometheus.yml` 必须执行 `docker restart flash-prometheus`——挂载的配置文件不会热加载，不重启 Targets 会停留在旧配置（表现为大盘全部 No data）
+15. 测试与验证：CI 跑 `mvn -B clean verify`（不再 `-DskipTests`），因此**改动必须带可跑测试**，否则 CI 直接红。只测单模块要带 `-am`（`mvn -o -pl flash-service -am clean test`），漏掉它会按本地仓库旧 jar 解析兄弟模块并报 `NoSuchMethodError`；只跑一个类再加 `-Dsurefire.failIfNoSpecifiedTests=false`。库存 Lua 用 Testcontainers 跑真实 Redis（`redis:7-alpine`），无 Docker 的机器整类跳过。★ 跑 `java -jar` 前一律 `mvn clean package`：IDE 后台编译器会往 `target/classes` 写坏 class，增量构建会直接打包它，表现为 `ClassNotFoundException` 只报裸类名。端到端验证方式：中间件 `docker compose up -d` + 后端在宿主机 `java -jar`（dev profile 指向 127.0.0.1，`broker.conf` 的 `brokerIP1 = 127.0.0.1`）
 
 ## 生成要求
 1. 直接生成可运行的完整代码

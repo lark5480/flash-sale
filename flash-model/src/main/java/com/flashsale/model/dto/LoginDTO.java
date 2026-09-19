@@ -4,10 +4,10 @@ import jakarta.validation.constraints.NotBlank;
 
 public class LoginDTO {
 
-    @NotBlank(message = "username is required")
+    @NotBlank(message = "请输入用户名")
     private String username;
 
-    @NotBlank(message = "password is required")
+    @NotBlank(message = "请输入密码")
     private String password;
 
     private String captchaId;

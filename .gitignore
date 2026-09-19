@@ -7,6 +7,10 @@ node_modules/
 flash-frontend/dist/
 flash-admin-frontend/dist/
 
+# ===== VitePress (docs site) 仅忽略生成物 =====
+docs/.vitepress/dist/
+docs/.vitepress/cache/
+
 # ===== IDE =====
 .idea/
 *.iml

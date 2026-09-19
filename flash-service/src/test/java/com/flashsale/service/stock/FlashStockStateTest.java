@@ -35,9 +35,9 @@ import com.flashsale.service.metrics.FlashSaleMetrics;
 /**
  * {@link FlashStockState} 单元测试 —— 锁住「flash:stock 是业务状态而非缓存」这条 P0 不变量。
  * <p>
- * 用 Mockito 而非真实 Redis：本机没有 Redis 可用，而这里要验证的恰恰是本类的读写口径
- * （键存在就不动它、重建减去在途、TTL 覆盖整场），与 Redis 服务端行为无关。
- * Lua 脚本自身的语义需要集成测试（Testcontainers）覆盖，尚未补。
+ * 用 Mockito 而非真实 Redis：这里要验证的是本类自身的读写口径（键存在就不动它、重建减去在途、
+ * TTL 覆盖整场），与 Redis 服务端行为无关。Lua 脚本在服务端的实际语义由
+ * {@link StockScriptRedisIntegrationTest} 对真实 Redis 覆盖。
  */
 class FlashStockStateTest {
 

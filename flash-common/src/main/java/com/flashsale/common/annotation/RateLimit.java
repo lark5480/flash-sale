@@ -29,5 +29,5 @@ public @interface RateLimit {
     int windowSeconds() default 1;
 
     /** 超限提示信息 */
-    String message() default "request too frequent";
+    String message() default "操作太频繁，请稍后再试";
 }
