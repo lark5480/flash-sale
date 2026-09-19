@@ -20,7 +20,7 @@ services:
     container_name: flash-mysql
     restart: unless-stopped
     ports:
-      - "127.0.0.1:3306:3306"
+      - "3306:3306"
     environment:
       MYSQL_ROOT_PASSWORD: root123
       TZ: Asia/Shanghai
@@ -38,7 +38,7 @@ services:
     container_name: flash-redis
     restart: unless-stopped
     ports:
-      - "127.0.0.1:6379:6379"
+      - "6379:6379"
     volumes:
       - flash-redis-data:/data
     command: redis-server --appendonly yes --maxmemory 256mb --maxmemory-policy allkeys-lru
@@ -48,8 +48,8 @@ services:
     container_name: flash-nacos
     restart: unless-stopped
     ports:
-      - "127.0.0.1:8848:8848"
-      - "127.0.0.1:9848:9848"
+      - "8848:8848"
+      - "9848:9848"
     environment:
       - MODE=standalone
       - PREFER_HOST_MODE=hostname
@@ -70,7 +70,7 @@ services:
     container_name: flash-rocketmq-namesrv
     restart: unless-stopped
     ports:
-      - "127.0.0.1:9876:9876"
+      - "9876:9876"
     environment:
       TZ: Asia/Shanghai
       JAVA_OPT_EXT: -server -Xms256m -Xmx256m
@@ -84,8 +84,8 @@ services:
       rocketmq-namesrv:
         condition: service_started
     ports:
-      - "127.0.0.1:10909:10909"
-      - "127.0.0.1:10911:10911"
+      - "10909:10909"
+      - "10911:10911"
     environment:
       TZ: Asia/Shanghai
       NAMESRV_ADDR: rocketmq-namesrv:9876
@@ -185,7 +185,7 @@ services:
     container_name: flash-prometheus
     restart: unless-stopped
     ports:
-      - "127.0.0.1:9090:9090"
+      - "9090:9090"
     volumes:
       - ./docker/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml
     command:
@@ -197,7 +197,7 @@ services:
     container_name: flash-grafana
     restart: unless-stopped
     ports:
-      - "127.0.0.1:3000:3000"
+      - "3000:3000"
     environment:
       - GF_SECURITY_ADMIN_PASSWORD=admin
       - GF_USERS_ALLOW_SIGN_UP=false
@@ -213,7 +213,7 @@ services:
     container_name: flash-node-exporter
     restart: unless-stopped
     ports:
-      - "127.0.0.1:9100:9100"
+      - "9100:9100"
 
   # ---- Sentinel Dashboard ----
   sentinel-dashboard:
@@ -221,7 +221,7 @@ services:
     container_name: flash-sentinel-dashboard
     restart: unless-stopped
     ports:
-      - "127.0.0.1:8718:8858"
+      - "8718:8858"
     environment:
       JAVA_OPTS: -Xms128m -Xmx128m
 

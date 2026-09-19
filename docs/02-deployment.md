@@ -38,9 +38,11 @@ docker compose up -d mysql redis nacos rocketmq-namesrv rocketmq-broker
 
 首次启动会拉取镜像，等待约 2-3 分钟。
 
-> **本地全量启动无需任何额外变量**：`docker compose up -d` 与 `docker compose down` 开箱即用，docker profile 自带一把仅本地可用的默认签名 key（与 dev 同一把，开源 demo 的可接受边界）。
+> **本指南的用法（中间件容器化 + 后端跑宿主机）无需任何额外变量**：`docker compose up -d mysql redis nacos rocketmq-namesrv rocketmq-broker` 与 `docker compose down` 开箱即用，docker profile 自带一把仅本地可用的默认签名 key（与 dev 同一把，开源 demo 的可接受边界）。
 > 真要部署时换成 prod profile（`${JWT_SECRET}` 无默认值，缺失即启动失败），或在 compose 里显式注入 `- JWT_SECRET=${JWT_SECRET}`，
 > 值来自 `.env`（已被忽略）或平台密钥服务，参考 `.env.example`。
+>
+> **不要期待 `docker compose up -d` 全量启动可用**：该路径当前已知不完整（Compose bake 构建 panic、namesrv 容器网络黑盒等五处坑），逐项清单与绕法见 README「方式一」。日常开发请按本指南走：中间件容器 + 后端/前端在宿主机启动。
 
 ### 2.2 验证中间件启动状态
 
@@ -72,24 +74,23 @@ docker exec flash-redis redis-cli ping
 
 > **配置文件说明**：docker-compose 中后端服务通过 `SPRING_PROFILES_ACTIVE=docker` 启用 `application-docker.yml`（中间件地址使用容器名，如 `mysql` 而非 `127.0.0.1`）。本地手动开发时使用 `application-dev.yml`（`127.0.0.1` 直连）。
 
-### 2.3 Nacos 命名空间初始化
+### 2.3 Nacos 管理员账号初始化
 
-> **重要**：Nacos 启动后，需要先初始化管理员密码并手动创建一个命名空间，否则微服务无法注册。
+**只有全新卷才需要这一步**（首次启动、或 `docker compose down -v` 之后）。`application-dev.yml` 用的是 **public 命名空间**（代码里注释「使用默认 public 命名空间，重启不丢失」），所以**不需要创建任何命名空间**。
 
-**操作步骤：**
-1. 访问 http://localhost:8848/nacos 。**Nacos 2.4+ 不再自带 `nacos / nacos` 账号**，首次访问会要求设置管理员密码——本项目按 `nacos / nacos` 设置即可（与 `application-dev.yml` / `application-docker.yml` 里的 `username/password` 一致）。
-   跳过这一步的后果：应用启动时报 `com.alibaba.nacos.api.exception.NacosException: user not found!`，看起来像密码配错，实际是服务端还没有任何用户。
-   > compose 已为 Nacos 挂了 `flash-nacos-data:/home/nacos/data`，所以**只需初始化一次**；此前没有数据卷时，内嵌 Derby 随容器一起消失，每次 `docker compose down` + `up` 都要重来一遍（命名空间与配置同样会丢）。
-2. 使用 `nacos / nacos` 登录，进入左侧菜单「命名空间」页面
-3. 点击「新建命名空间」
-4. **命名空间 ID** 填写（必须与配置一致）：
-   ```
-   4b56aa8f-8ca1-484a-9189-607d0fd733ab
-   ```
-5. **命名空间名称** 可自定义，例如 `flash-sale-dev`
-6. 点击「确定」完成创建
+判断是否要初始化：后端启动报 `NacosException: user not found!`，或 `docker logs flash-nacos | grep "User nacos not found"` 命中，就是服务端还没有账号。
 
-> **注意**：命名空间 ID 是在创建时指定的，之后无法修改。如果创建时未填写 ID，Nacos 会自动生成随机 ID，此时必须删除后重新创建。该 ID 与 `application-dev.yml` 中的 `spring.cloud.nacos.discovery.namespace` 配置一致。
+一条命令初始化（推荐，不依赖浏览器与宿主端口转发）：
+
+```bash
+docker exec flash-nacos sh -c 'wget -q -O- -T 6 --post-data="password=nacos" http://127.0.0.1:8848/nacos/v1/auth/admin'
+# 期望输出：{"username":"nacos","password":"nacos"}
+```
+
+**为什么用 `docker exec` 而不是开浏览器**：浏览器要走的 `127.0.0.1:8848` 是 Docker 发布的端口，在 Rancher Desktop / WSL2 下这条宿主转发链路会失效（连得上、拿不到响应），此时控制台打不开、初始化也就无从下手；容器内回环始终可达。控制台能打开时，直接访问 http://localhost:8848/nacos 按提示设置 `nacos / nacos` 效果相同。
+
+> compose 已为 Nacos 挂了 `flash-nacos-data:/home/nacos/data`（内嵌 Derby 的数据目录），普通的 `docker compose down` + `up` **不会再要求初始化**，命名空间与配置也不丢。
+> 但 `docker compose down -v` 会连卷一起删掉 —— 那之后就又是一次全新实例，需要重新执行上面那条命令。本轮就踩过：09:38 清理残留时用了 `-v`，账号随卷消失。
 
 ### 2.4 启动监控栈
 
@@ -284,18 +285,19 @@ kill -9 <PID号>
 
 > **提示**：常见的端口冲突包括 MySQL（3306）、Redis（6379）、Nacos（8848）。如果本地已经安装了这些服务，需要先停止本地服务或修改端口映射。
 
-### 7.2 Nacos 命名空间 ID 不匹配
+### 7.2 后端连不上 Nacos：先分清「没有账号」还是「链路不通」
 
-微服务启动后无法注册到 Nacos，日志中持续报错。
+dev 用 public 命名空间，**不需要创建命名空间**（prod 才通过 `${NACOS_NAMESPACE}` 指定）。注册失败按下面两步定位：
 
-**排查步骤：**
+1. **服务端没有管理员账号** → 日志是 `NacosException: user not found!`。按 §2.3 那条 `docker exec` 命令初始化即可，不用开浏览器。
+2. **宿主端口转发失效（Rancher Desktop / WSL2）** → 现象是连接能建立但一直不返回（`curl http://127.0.0.1:8848/...` 返回 000 或被重置），而同一批发布的其他端口（3306、3000、9090）正常。确认办法：
 
-1. 登录 Nacos 控制台 http://localhost:8848/nacos
-2. 进入「命名空间」页面
-3. 确认存在 ID 为 `4b56aa8f-8ca1-484a-9189-607d0fd733ab` 的命名空间
-4. 如果不存在或 ID 不同，需要新建一个命名空间并指定该 ID
+   ```bash
+   # 容器内回环有响应 = Nacos 本身健康，问题在宿主转发链路
+   docker exec flash-nacos sh -c 'wget -q -O- -T 5 http://127.0.0.1:8848/nacos/v1/console/server/state | head -c 60'
+   ```
 
-> **注意**：命名空间 ID 是在创建时指定的，之后无法修改。如果创建时没有指定 ID，Nacos 会自动生成一个随机 ID，此时只能删除后重新创建。
+   走到这一步，`docker compose up -d --force-recreate nacos` 通常**不能**恢复（发布端口的转发生成在 Rancher 侧），需要重启容器运行时（Rancher 界面 Restart Container Runtime，或 `rdctl stop && rdctl start`），然后重新 `docker compose up -d <中间件>`。这与 §2.3 用 `docker exec` 初始化是同一个原因：能不依赖宿主端口的事，都别依赖它。
 
 ### 7.3 RocketMQ 连接超时
 
@@ -357,7 +359,7 @@ npm install --registry=https://registry.npmmirror.com
 
 - [ ] MySQL 运行正常，`flash_sale` 数据库和 4 张表已创建
 - [ ] Redis 运行正常，`redis-cli ping` 返回 `PONG`
-- [ ] Nacos 控制台可访问，命名空间 `4b56aa8f-8ca1-484a-9189-607d0fd733ab` 已创建
+- [ ] Nacos 管理员账号已初始化（全新卷才需要，命令见 §2.3）
 - [ ] RocketMQ NameServer 和 Broker 均运行正常
 - [ ] flash-api（8081）启动成功，日志无报错
 - [ ] flash-admin（8082）启动成功，日志无报错

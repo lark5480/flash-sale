@@ -122,37 +122,54 @@ flash-sale
 
 ## 快速启动
 
-### 方式一：Docker Compose 一键部署（推荐）
+### 方式一：Docker Compose 全量部署（本项目未采用，日常请用方式二）
+
+compose 文件按「**只用 Docker 起中间件**」维护。后端/前端容器这一段保留着但**不保证可用**：2026-09-19 逐项实测，全量启动要过五道坎，最后一道（虚拟化层网络）不在仓库能解决的范围内，因此没有继续投入。当时的结论记录如下，免得再有人去趟。
+
+| # | 卡点 | 现状 |
+|---|------|------|
+| 1 | Compose 自己构建镜像会**崩掉整个命令**：Docker Compose v2.40.3 + containerd 镜像存储下，bake 构建路径 panic（栈顶 `build_bake.go`）。绕法是先手工建镜像：`COMPOSE_BAKE=false docker compose build api admin gateway` | 未根治（该开关官方标 deprecated，长期做法是固定 compose 版本或用 `docker buildx build --target` 逐个打） |
+| 2 | broker 注册地址：`docker/rocketmq/conf/broker.conf` 里 `brokerIP1 = 127.0.0.1` 是给「后端跑宿主机」用的，全量容器下其他容器拿到的 broker 地址指向自己 → 消费者连不上 | 绕法已备好但 **compose 未挂载**：`docker/rocketmq/conf/broker-docker.conf`（`brokerIP1 = rocketmq-broker`），要走全量需自行把 broker 服务的 conf 换成它 |
+| 3 | 前端容器不反代：`nginx:alpine` 默认只当静态文件处理，`/api/**` 与 `/admin/**` 全 404（页面能打开、数据取不到） | 绕法已备好但 **compose 未挂载**：`docker/nginx/frontend.conf`、`admin-frontend.conf`（含 SPA `try_files` 与到 `gateway:8080` 的反代），要走全量需自行挂进两个前端服务 |
+| 4 | Nacos 2.4+ 不再自带 `nacos/nacos`，全新实例没有用户，后端注册直接报 `user not found!`；原先没挂数据卷时每次 `down` 都要重新初始化 | 已修（这行对两种方式都生效）：compose 挂 `flash-nacos-data:/home/nacos/data`，普通 `down`/`up` 不再要求初始化；全新卷用一条 `docker exec` 命令设密码，见部署指南 §2.3 |
+| 5 | 宿主侧端口转发在 Rancher Desktop / WSL2 下会整体性失效（表现为某几个发布端口连得上拿不到响应，`--force-recreate` 无效，需重启容器运行时），容器间访问同一端点正常 | **未解决**，属虚拟化层网络，不是仓库配置问题 |
+
+仍要走全量部署，命令顺序是（前提：先把第 2、3 行的配置挂回去）：
 
 ```bash
-# 1. 构建前端产物（Docker 后端镜像会自动编译）
 cd flash-frontend && npm install && npm run build && cd ..
 cd flash-admin-frontend && npm install && npm run build && cd ..
-
-# 2. 一键启动（中间件 + 后端 + 前端）
+COMPOSE_BAKE=false docker compose build api admin gateway
 docker compose up -d
+docker compose exec -T mysql mysql -uroot -proot123 flash_sale < sql/init.sql
+# 全新 Nacos 卷还要初始化一次管理员密码（命令见部署指南 §2.3），否则 api/admin 起不来
+```
 
-# 3. 初始化数据库表
+### 方式二：本地手动启动（日常开发用这个）
+
+中间件用 Docker，后端与前端在宿主机跑 —— 秒杀全链路（下单 → Redis 预扣 → MQ → 消费落库 → 取消归还 → 重试与死信）已在此形态下完整验证过。
+
+#### 1. 启动中间件
+
+```bash
+docker compose up -d mysql redis nacos rocketmq-namesrv rocketmq-broker
+```
+
+#### 2. 初始化数据库
+
+```bash
+# 数据在 flash-mysql-data 卷里，建过一次即可（`down -v` 之后要重来）
 docker compose exec -T mysql mysql -uroot -proot123 flash_sale < sql/init.sql
 ```
 
-> 前端产品构建一次即可，后续修改前端代码需要重新 `npm run build`。
-> 若只需中间件（本地开发后端），运行：`docker compose up -d mysql redis nacos rocketmq-namesrv rocketmq-broker`
-> 启动监控栈：`docker compose up -d prometheus grafana node-exporter sentinel-dashboard`
-
-### 方式二：本地手动启动
-
-#### 1. 初始化数据库
+#### 3. 初始化 Nacos 管理员账号（仅全新卷需要）
 
 ```bash
-mysql -u root -p < sql/init.sql
+# 报 user not found! 时才执行；数据在 flash-nacos-data 卷里，普通 down/up 不会丢
+docker exec flash-nacos sh -c 'wget -q -O- -T 6 --post-data="password=nacos" http://127.0.0.1:8848/nacos/v1/auth/admin'
 ```
 
-#### 2. 启动中间件
-
-确保 MySQL、Redis、Nacos、RocketMQ 均已启动。
-
-#### 3. 启动后端服务
+#### 4. 启动后端服务
 
 ```bash
 # 编译（跑全部后端测试；无 Docker 时真实 Redis 的集成测试整类跳过）
@@ -164,7 +181,7 @@ java -jar flash-admin/target/flash-admin-1.0.0.jar
 java -jar flash-gateway/target/flash-gateway-1.0.0.jar
 ```
 
-#### 4. 启动前端
+#### 5. 启动前端
 
 ```bash
 # 用户端
@@ -174,13 +191,14 @@ cd flash-frontend && npm install && npm run dev
 cd flash-admin-frontend && npm install && npm run dev
 ```
 
-### 5. 访问
+#### 6. 访问
 
 | 服务 | 地址 |
 |------|------|
 | 网关（统一入口） | http://localhost:8080 |
 | 用户端前端 | http://localhost:5173 |
 | 管理端前端 | http://localhost:5174 |
+| Nacos 控制台 | http://localhost:8848/nacos（`nacos/nacos`，需已完成第 3 步） |
 | Prometheus | http://localhost:9090 |
 | Grafana | http://localhost:3000（admin/admin） |
 | Sentinel Dashboard | http://localhost:8718 |
