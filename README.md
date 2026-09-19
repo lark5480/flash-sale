@@ -92,8 +92,7 @@ flash-sale
   - Prometheus（:9090）拉取指标，Grafana（:3000，admin/admin）可视化大盘
   - Dashboard 自动加载（Provisioning）：数据源 + 看板 JSON 版本控制，重启不丢失
   - Dashboard：JVM 堆内存 / GC / CPU / HTTP QPS & P99 / 下单成功失败 & QPS & 成功率
-  - ⚠️ 关键配置：`management.metrics.distribution.percentiles-histogram.http.server.requests: true`（暴露 `_bucket` 指标，否则 P99 计算为 "No data"）
-  - ⚠️ 后端跑在宿主机：`docker/prometheus/prometheus.yml` 的 targets 已默认指向 `host.docker.internal:8081` / `8082` / `8080`；若改为全容器部署（api/admin/gateway 也进 Compose），需把对应 target 改回容器名 `api:8081` / `admin:8082` / `gateway:8080`
+  - ⚠️ 两个部署关键坑（P99 依赖 `_bucket` 直方图开关、Prometheus 抓取地址随宿主机/全容器部署切换）详见[可观测性](docs/architecture/observability.md)与[全量容器化部署](docs/deployment/full-container.md)
 
 ### 自动化
 - 秒杀活动状态自动流转（定时任务：待开始 -> 进行中 -> 已结束）
@@ -124,26 +123,9 @@ flash-sale
 
 ### 方式一：Docker Compose 全量部署（本项目未采用，日常请用方式二）
 
-compose 文件按「**只用 Docker 起中间件**」维护。后端/前端容器这一段保留着但**不保证可用**：2026-09-19 逐项实测，全量启动要过五道坎，最后一道（虚拟化层网络）不在仓库能解决的范围内，因此没有继续投入。当时的结论记录如下，免得再有人去趟。
+compose 文件按「**只用 Docker 起中间件**」维护，后端/前端容器这一段保留着但**不保证可用**：全量启动当前已知有 5 处卡点（Compose bake 构建 panic、broker 注册地址、前端 nginx 未反代、Nacos 全新实例初始化、Rancher/WSL2 宿主端口转发失效），其中最后一道属虚拟化层网络、不在仓库能解决范围内。
 
-| # | 卡点 | 现状 |
-|---|------|------|
-| 1 | Compose 自己构建镜像会**崩掉整个命令**：Docker Compose v2.40.3 + containerd 镜像存储下，bake 构建路径 panic（栈顶 `build_bake.go`）。绕法是先手工建镜像：`COMPOSE_BAKE=false docker compose build api admin gateway` | 未根治（该开关官方标 deprecated，长期做法是固定 compose 版本或用 `docker buildx build --target` 逐个打） |
-| 2 | broker 注册地址：`docker/rocketmq/conf/broker.conf` 里 `brokerIP1 = 127.0.0.1` 是给「后端跑宿主机」用的，全量容器下其他容器拿到的 broker 地址指向自己 → 消费者连不上 | 绕法已备好但 **compose 未挂载**：`docker/rocketmq/conf/broker-docker.conf`（`brokerIP1 = rocketmq-broker`），要走全量需自行把 broker 服务的 conf 换成它 |
-| 3 | 前端容器不反代：`nginx:alpine` 默认只当静态文件处理，`/api/**` 与 `/admin/**` 全 404（页面能打开、数据取不到） | 绕法已备好但 **compose 未挂载**：`docker/nginx/frontend.conf`、`admin-frontend.conf`（含 SPA `try_files` 与到 `gateway:8080` 的反代），要走全量需自行挂进两个前端服务 |
-| 4 | Nacos 2.4+ 不再自带 `nacos/nacos`，全新实例没有用户，后端注册直接报 `user not found!`；原先没挂数据卷时每次 `down` 都要重新初始化 | 已修（这行对两种方式都生效）：compose 挂 `flash-nacos-data:/home/nacos/data`，普通 `down`/`up` 不再要求初始化；全新卷用一条 `docker exec` 命令设密码，见部署指南 §2.3 |
-| 5 | 宿主侧端口转发在 Rancher Desktop / WSL2 下会整体性失效（表现为某几个发布端口连得上拿不到响应，`--force-recreate` 无效，需重启容器运行时），容器间访问同一端点正常 | **未解决**，属虚拟化层网络，不是仓库配置问题 |
-
-仍要走全量部署，命令顺序是（前提：先把第 2、3 行的配置挂回去）：
-
-```bash
-cd flash-frontend && npm install && npm run build && cd ..
-cd flash-admin-frontend && npm install && npm run build && cd ..
-COMPOSE_BAKE=false docker compose build api admin gateway
-docker compose up -d
-docker compose exec -T mysql mysql -uroot -proot123 flash_sale < sql/init.sql
-# 全新 Nacos 卷还要初始化一次管理员密码（命令见部署指南 §2.3），否则 api/admin 起不来
-```
+> 逐项结论、绕法与命令顺序已归档到[全量容器化部署](docs/deployment/full-container.md)，此处不再展开。日常开发请用方式二。
 
 ### 方式二：本地手动启动（日常开发用这个）
 
@@ -263,11 +245,23 @@ Consumer 消费：幂等校验 → 分布式锁 → DB 乐观锁扣库存 → �
 
 ## 文档
 
-| 文档 | 说明 |
+文档已拆为按主题的 wiki 结构（可用 VitePress 构建为带侧栏与全文搜索的文档站，见下方）：
+
+| 分区 | 页面 |
 |------|------|
-| [01-架构概览](docs/01-architecture.md) | 系统架构、模块职责、核心链路、数据设计、安全认证 |
-| [02-部署指南](docs/02-deployment.md) | 中间件 Docker 配置、数据库初始化、服务启动、常见问题排查 |
-| [03-开发指南](docs/03-development.md) | API 接口文档、包结构规范、枚举值、代码规范、前端开发 |
+| **架构** | [系统总览](docs/architecture/overview.md) · [秒杀下单核心链路](docs/architecture/flash-sale-flow.md) · [数据设计](docs/architecture/data-design.md) · [安全与认证](docs/architecture/security.md) · [可观测性](docs/architecture/observability.md) · [定时任务与消费者隔离](docs/architecture/scheduling-and-isolation.md) |
+| **部署** | [本地开发部署](docs/deployment/local.md) · [常见问题排查](docs/deployment/troubleshooting.md) · [全量容器化部署](docs/deployment/full-container.md) |
+| **开发** | [模块依赖与包结构](docs/development/structure.md) · [API 接口文档](docs/development/api-reference.md) · [统一返回与枚举](docs/development/response-and-enums.md) · [Redis Lua 脚本](docs/development/redis-lua.md) · [RocketMQ 消息机制](docs/development/rocketmq.md) · [前端开发](docs/development/frontend.md) · [代码规范](docs/development/code-standards.md) · [测试](docs/development/testing.md) |
+| **知识笔记** | [知识笔记与面试 Q&A](docs/notes/interview-qa.md) |
+| **贡献** | [CONTRIBUTING](CONTRIBUTING.md)：本地跑起、分支/提交策略、测试与密钥门禁、版本冻结约束 |
+
+### 本地预览文档站（VitePress）
+
+```bash
+npm install          # 安装 vitepress（仅文档站需要）
+npm run docs:dev     # 本地预览 http://localhost:5173
+npm run docs:build   # 构建静态站点到 docs/.vitepress/dist
+```
 
 ## 姊妹项目：跨服务数据一致性
 
