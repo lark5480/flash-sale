@@ -86,7 +86,7 @@ graph TB
 通用工具与基础设施，无业务逻辑。
 
 - `ResultVO` / `ResultCode` — 统一响应封装
-- `BaseEntity` — 实体基类（id, createTime, updateTime）
+- `BaseEntity` — 实体基类（id, createTime, updateTime, isDeleted + `@TableLogic`）
 - `JwtUtil` — JWT 令牌工具类
 - `PasswordUtil` — BCrypt 密码加密
 - `SnowflakeIdGenerator` — 雪花 ID 生成器（自定义 epoch + 时钟回滚保护）
@@ -102,7 +102,7 @@ graph TB
 - **实体类**：`User`、`Item`、`FlashSale`、`FlashOrder`
 - **DTO**：前端入参映射对象
 - **VO**：前端出参视图对象
-- **枚举**：`FlashSaleStatusEnum`（PENDING / ACTIVE / ENDED）、`OrderStatusEnum`（PENDING / PAID / CANCELLED）
+- **枚举**：`FlashSaleStatusEnum`（PENDING / ACTIVE / ENDED / CANCELLED）、`OrderStatusEnum`（PENDING_PAYMENT / PAID / CANCELLED / REFUNDED）
 
 ### flash-mapper（数据访问层）
 
@@ -116,7 +116,7 @@ MyBatis-Plus Mapper 接口。
 
 核心业务实现，包含服务层、配置类和 MQ 生产者/消费者。
 
-- **配置类**：`RedisConfig`、`CacheConfig`（Caffeine 三级缓存 L1）、`IdGeneratorConfig`（雪花 ID Bean）、`AsyncConfig`（空，已迁至 MQ）
+- **配置类**：`RedisConfig`、`CacheConfig`（Caffeine 三级缓存 L1）、`RedisPubSubConfig` + `CacheInvalidatePublisher` / `CacheInvalidateListener`（L1 跨节点失效广播，见[数据设计 §3](./data-design.md#_3-三级缓存的跨节点失效-redis-pub-sub)）、`IdGeneratorConfig`（雪花 ID Bean）、`AsyncConfig`（空，已迁至 MQ）
 - **DataInitRunner** — 应用启动时初始化数据的钩子
 - **FlashOrderProducer** — 秒杀下单消息生产者（syncSend 同步发送）
 - **RateLimitInterceptor** — 接口限流拦截器（Redis ZSET 滑动窗口）
@@ -138,7 +138,7 @@ MyBatis-Plus Mapper 接口。
 
 面向运营管理人员的后台 REST 接口。
 
-- `AdminAuthController` — 管理员登录（需验证码）
+- `AuthController` — 管理员登录（需验证码），与 C 端同名控制器分处 `flash-admin` / `flash-api` 两个模块
 - 商品 / 秒杀活动 / 订单 / 用户 的 CRUD 管理
 - `CaptchaController` — 生成算术验证码
 - `WebMvcConfig` — 注册 RateLimitInterceptor

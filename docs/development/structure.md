@@ -147,4 +147,4 @@ com.flashsale
         └── CorsConfig              # 跨域配置
 ```
 
-> 各模块的业务职责说明见[系统架构总览 §3](../architecture/overview.md#3-模块职责)；编码规范见[代码规范](./code-standards.md)。
+> 各模块的业务职责说明见[系统架构总览 §3](../architecture/overview.md#_3-模块职责)；编码规范见[代码规范](./code-standards.md)。

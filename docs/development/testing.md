@@ -1,6 +1,6 @@
 # 测试
 
-**现状**：后端 49 个用例（flash-common 15 / flash-service 34），CI 跑 `mvn -B clean verify`（已不再 `-DskipTests`）。
+**现状**：后端测试集中在秒杀链路的不变式上，分布在 `flash-common` 与 `flash-service` 两个模块（**用例数不写进文档**，以 `mvn clean verify` 的 surefire 汇总为准，避免加一个用例就要回来改数字）；CI 跑 `mvn -B clean verify`（已不再 `-DskipTests`）。
 
 ## 1. 测试类与覆盖的不变式
 

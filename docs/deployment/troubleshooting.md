@@ -25,7 +25,7 @@ kill -9 <PID号>
 
 dev 用 public 命名空间，**不需要创建命名空间**（prod 才通过 `${NACOS_NAMESPACE}` 指定）。注册失败按下面两步定位：
 
-1. **服务端没有管理员账号** → 日志是 `NacosException: user not found!`。按[本地开发部署 §2.3](./local.md#_2-3-nacos-管理员账号初始化仅全新卷需要) 那条 `docker exec` 命令初始化即可，不用开浏览器。
+1. **服务端没有管理员账号** → 日志是 `NacosException: user not found!`。按[本地开发部署 §2.3](./local.md#_2-3-nacos-管理员账号初始化-仅全新卷需要) 那条 `docker exec` 命令初始化即可，不用开浏览器。
 2. **宿主端口转发失效（Rancher Desktop / WSL2）** → 现象是连接能建立但一直不返回（`curl http://127.0.0.1:8848/...` 返回 000 或被重置），而同一批发布的其他端口（3306、3000、9090）正常。确认办法：
 
    ```bash
