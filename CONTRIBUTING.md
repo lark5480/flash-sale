@@ -29,26 +29,16 @@
 
 ## 本地开发流程
 
-本项目日常开发采用「**中间件容器化 + 后端/前端跑宿主机**」形态（全量容器化部署已知不完整，勿用，原因见[全量容器化部署](docs/deployment/full-container.md)）。
+本项目日常开发采用「**中间件容器化 + 后端/前端跑宿主机**」形态（全量容器化部署已知不完整，勿用，原因见[全量容器化部署](docs/deployment/full-container.md)）。**权威完整步骤**（含中间件状态验证、全新 Nacos 卷初始化管理员账号）见[本地开发部署](docs/deployment/local.md)，TL;DR：
 
 ```bash
-# 1. 启动中间件
-docker compose up -d mysql redis nacos rocketmq-namesrv rocketmq-broker
-
-# 2. 初始化数据库（建过一次即可，down -v 之后要重来）
-docker compose exec -T mysql mysql -uroot -proot123 flash_sale < sql/init.sql
-
-# 3. 编译并跑全部后端测试（与 CI 同一命令）
-mvn clean verify
-
-# 4. 按顺序启动后端（网关最后）
-java -jar flash-api/target/flash-api-1.0.0.jar
+docker compose up -d mysql redis nacos rocketmq-namesrv rocketmq-broker         # 中间件
+docker compose exec -T mysql mysql -uroot -proot123 flash_sale < sql/init.sql   # 库初始化，建过一次即可
+mvn clean verify                                                                 # 编译 + 全部测试，与 CI 同一命令
+java -jar flash-api/target/flash-api-1.0.0.jar                                   # 按顺序启动，网关最后
 java -jar flash-admin/target/flash-admin-1.0.0.jar
 java -jar flash-gateway/target/flash-gateway-1.0.0.jar
-
-# 5. 启动前端
-cd flash-frontend && npm install && npm run dev
-cd flash-admin-frontend && npm install && npm run dev
+cd flash-frontend && npm install && npm run dev                                  # 前端（管理端在 flash-admin-frontend 同理）
 ```
 
 ## 分支与提交策略
@@ -75,9 +65,7 @@ cd flash-admin-frontend && npm install && npm run dev
 CI 执行 `mvn -B clean verify`（**不跳过测试**），因此：
 
 - **任何改动都必须带可运行的测试**，否则 CI 直接红。
-- 只测单个模块要带 `-am`（`mvn -o -pl flash-service -am clean test`），否则会按本地仓库旧 jar 解析兄弟模块并报 `NoSuchMethodError`。
-- 只跑一个测试类时加 `-Dsurefire.failIfNoSpecifiedTests=false`。
-- 库存 Lua 相关测试用 Testcontainers 起真实 Redis（`redis:7-alpine`）；本机无 Docker 时该整类会自动跳过。
+- 单模块 / 单测试类的跑法（`-am`、`-Dsurefire.failIfNoSpecifiedTests`）、Testcontainers 真实 Redis 在无 Docker 机器的整类跳过等命令细节，见[测试](docs/development/testing.md)。
 
 ## 密钥门禁（三道闸）
 
@@ -98,7 +86,7 @@ CI 执行 `mvn -B clean verify`（**不跳过测试**），因此：
 
 ## 版本冻结策略
 
-项目功能已完成，技术栈**有意冻结**：Spring Boot 3.2.0 / Spring Cloud 2023.0.0 / Spring Cloud Alibaba 2023.0.1.0 / Nacos v2.5.1。
+项目功能已完成，技术栈**有意冻结**，具体版本清单的**权威真源**是 [`AGENTS.md`](AGENTS.md) 的「版本策略」一节（AI 编码工具与人类贡献者同守这一份）。
 
 - **请勿在 PR 中顺手升级框架 / 中间件版本**，修改 `pom.xml` 或 `docker-compose.yml` 时不要顺带 bump 版本号。
 - Boot 3.2 虽已过 OSS EOL，但这是知情决策而非欠账；解冻升级需由维护者在明确场景下统一推进。

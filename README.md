@@ -21,7 +21,7 @@
 | 熔断降级 | Sentinel 1.8.8（@SentinelResource 业务层限流/熔断） |
 | 前端 | Vue 3 + Vite + Element Plus (管理端) |
 | 部署 | Docker Compose（14 服务编排） |
-| 测试 | JUnit 5 + AssertJ + Mockito；Testcontainers 起真实 Redis 验证库存 Lua（49 个用例） |
+| 测试 | JUnit 5 + AssertJ + Mockito；Testcontainers 起真实 Redis 验证库存 Lua（用例清单见[测试](docs/development/testing.md)） |
 | CI | GitHub Actions（`mvn -B clean verify`：测试 + 构建 + Artifact 上传） |
 
 ## 项目结构
@@ -63,19 +63,15 @@ flash-sale
 - 用户列表 + 启用/禁用
 
 ### 安全防护
-- 鉴权两道清单必须同步：网关 `AuthGlobalFilter`（放行注册/登录/验证码、`/images/**`、以及游客可浏览的秒杀列表与 GET 详情）+ flash-api `ApiSecurityConfig` 的 `permitAll`。网关放行只代表请求能到下游，api 仍会二次判定；只改一处会出现「网关说公开、api 拒 403」。返回码：**未登录 401、权限不足 403**。下单/订单类接口一律要求登录（游客能看不能买）
-- 接口限流（@RateLimit 注解 + Redis ZSET 滑动窗口）—— **控制层限流**
-  - 秒杀下单：5 次 / 5 秒
-  - C 端登录：5 次 / 60 秒
-  - 注册：3 次 / 60 秒
-  - 管理端登录：3 次 / 60 秒
+- 鉴权与权限：网关与 flash-api 各持一份放行清单、必须两处同步，只改一处会造出裂口；对外行为口径——游客可浏览注册/登录/验证码、秒杀列表与 GET 详情，下单/订单类接口一律要求登录（**游客能看不能买**）；返回码：**未登录 401、权限不足 403**。具体路径清单与改动约束的**权威真源**见[安全与认证](docs/architecture/security.md)
+- 接口限流（@RateLimit 注解 + Redis ZSET 滑动窗口）—— **控制层限流**：秒杀下单 5 次/5 秒，C 端登录 5 次/60 秒，注册与管理端登录 3 次/60 秒；逐接口权威口径见[安全与认证 §5 接口限流](docs/architecture/security.md#5-接口限流)
 - 熔断降级（@SentinelResource + Sentinel Dashboard）—— **业务层流控/熔断**
   - 秒杀下单方法 `FlashOrderServiceImpl.purchase()` 标注 `@SentinelResource`
   - blockHandler 返回"系统繁忙，请稍后重试"，fallback 兜底业务异常
   - Sentinel Dashboard（:8718）动态推送流控/熔断/热点规则
 - 验证码（算术题 + Redis 存储，一次性消费）
-- 签名密钥分环境边界：dev 与 docker profile 各带一把**仅本地可用**的默认 key（克隆下来零配置就能跑，开源 demo 的可接受取舍）；prod profile 走 `${JWT_SECRET}` 无默认值，且 `JwtUtil` 里不留任何代码兜底、启动即校验（缺失/空白/短于 32 字节直接拒绝启动，不会因为忘配而静默用公开 key 签发）。要换成真密钥：`- JWT_SECRET=${JWT_SECRET}` 注入或改走 prod，值放 `.env`（已忽略）或平台密钥服务，参考 `.env.example`
-- 密钥防泄露三道闸：本地 pre-commit 钩子（启用：`git config core.hooksPath scripts/git-hooks`）→ CI `secret-scan` job 扫提交历史（gitleaks，`--redact`）→ `.gitignore` 覆盖 `.env` 与压测产物。注意 gitleaks 抓不到配置里的低熵口令，"扫描通过"不等于"仓库里没有明文密钥"
+- 签名密钥分环境边界：dev 与 docker profile 各带一把**仅本地可用**的默认 key（克隆下来零配置就能跑，开源 demo 的可接受取舍）；prod profile 走 `${JWT_SECRET}` 无默认值、`JwtUtil` 启动即校验（缺失/空白/短于 32 字节拒绝启动）。换真密钥参考 `.env.example`，机制细节的**真源**见[安全与认证 §1](docs/architecture/security.md#1-jwt-双-token-机制)
+- 密钥防泄露三道闸：本地 pre-commit 钩子（启用：`git config core.hooksPath scripts/git-hooks`）→ CI `secret-scan` job 扫提交历史（gitleaks，`--redact`）→ `.gitignore` 覆盖 `.env` 与压测产物。注意 gitleaks 抓不到配置里的低熵口令，"扫描通过"不等于"仓库里没有明文密钥"；启用方式与操作细节见 [CONTRIBUTING §密钥门禁三道闸](CONTRIBUTING.md#密钥门禁三道闸)
 - 异常分类处理（业务异常吞没，系统异常 re-throw 触发 MQ 重试）
 
 ### 消息可靠性
@@ -129,58 +125,36 @@ compose 文件按「**只用 Docker 起中间件**」维护，后端/前端容�
 
 ### 方式二：本地手动启动（日常开发用这个）
 
-中间件用 Docker，后端与前端在宿主机跑 —— 秒杀全链路（下单 → Redis 预扣 → MQ → 消费落库 → 取消归还 → 重试与死信）已在此形态下完整验证过。
-
-#### 1. 启动中间件
+中间件用 Docker，后端与前端在宿主机跑 —— 秒杀全链路（下单 → Redis 预扣 → MQ → 消费落库 → 取消归还 → 重试与死信）已在此形态下完整验证过。**权威完整步骤**（含中间件状态验证、全新 Nacos 卷的管理员初始化、监控栈启动）见[本地开发部署](docs/deployment/local.md)，最小可跑路径：
 
 ```bash
+# 1. 中间件 + 数据库初始化（数据在 flash-mysql-data 卷里，建过一次即可，down -v 之后要重来）
 docker compose up -d mysql redis nacos rocketmq-namesrv rocketmq-broker
-```
-
-#### 2. 初始化数据库
-
-```bash
-# 数据在 flash-mysql-data 卷里，建过一次即可（`down -v` 之后要重来）
 docker compose exec -T mysql mysql -uroot -proot123 flash_sale < sql/init.sql
-```
 
-#### 3. 初始化 Nacos 管理员账号（仅全新卷需要）
-
-```bash
-# 报 user not found! 时才执行；数据在 flash-nacos-data 卷里，普通 down/up 不会丢
-docker exec flash-nacos sh -c 'wget -q -O- -T 6 --post-data="password=nacos" http://127.0.0.1:8848/nacos/v1/auth/admin'
-```
-
-#### 4. 启动后端服务
-
-```bash
-# 编译（跑全部后端测试；无 Docker 时真实 Redis 的集成测试整类跳过）
+# 2. 编译（跑全部后端测试；无 Docker 时真实 Redis 的集成测试整类跳过）
 mvn clean verify
 
-# 按顺序启动（网关最后）
+# 3. 按顺序启动后端（网关最后：网关经 Nacos 发现服务，业务服务未注册时路由不通）
 java -jar flash-api/target/flash-api-1.0.0.jar
 java -jar flash-admin/target/flash-admin-1.0.0.jar
 java -jar flash-gateway/target/flash-gateway-1.0.0.jar
+
+# 4. 启动前端
+cd flash-frontend && npm install && npm run dev          # 用户端
+cd flash-admin-frontend && npm install && npm run dev    # 管理端
 ```
 
-#### 5. 启动前端
+后端启动报 `NacosException: user not found!`（仅全新 Nacos 卷需要）时，先执行[本地开发部署](docs/deployment/local.md) §2.3 的一次性初始化命令；其他问题先查[常见问题排查](docs/deployment/troubleshooting.md)。
 
-```bash
-# 用户端
-cd flash-frontend && npm install && npm run dev
-
-# 管理端
-cd flash-admin-frontend && npm install && npm run dev
-```
-
-#### 6. 访问
+#### 访问
 
 | 服务 | 地址 |
 |------|------|
 | 网关（统一入口） | http://localhost:8080 |
 | 用户端前端 | http://localhost:5173 |
 | 管理端前端 | http://localhost:5174 |
-| Nacos 控制台 | http://localhost:8848/nacos（`nacos/nacos`，需已完成第 3 步） |
+| Nacos 控制台 | http://localhost:8848/nacos（`nacos/nacos`，全新实例需先按 §2.3 初始化） |
 | Prometheus | http://localhost:9090 |
 | Grafana | http://localhost:3000（admin/admin） |
 | Sentinel Dashboard | http://localhost:8718 |
