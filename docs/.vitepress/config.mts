@@ -32,7 +32,7 @@ export default defineConfig({
           items: [
             { text: '系统架构总览', link: '/architecture/overview' },
             { text: '秒杀下单核心链路', link: '/architecture/flash-sale-flow' },
-            { text: '数据设计（DB + Redis Key）', link: '/architecture/data-design' },
+            { text: '数据设计（DB + Redis Key + 缓存失效）', link: '/architecture/data-design' },
             { text: '安全与认证', link: '/architecture/security' },
             { text: '可观测性（监控栈）', link: '/architecture/observability' },
             { text: '定时任务与消费者隔离', link: '/architecture/scheduling-and-isolation' },

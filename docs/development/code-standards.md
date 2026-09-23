@@ -5,7 +5,7 @@
 ## 1. 通用规范
 
 1. 遵循**阿里巴巴 Java 开发手册**。
-2. 命名约定见[下方表格](#2-命名规范)。
+2. 命名约定见[下方表格](#_2-命名规范)。
 3. **统一返回 `ResultVO<T>`**：成功用 `ResultVO.success(data)`，失败用 `ResultVO.fail(ResultCode.xxx)` 或 `ResultVO.fail(code, msg)`；错误码统一在 `ResultCode` 枚举中维护，禁止在调用处硬编码数字。完整字段与错误码清单见[统一返回与枚举](./response-and-enums.md)。
 4. **全局异常处理走 `GlobalExceptionHandler`（`@RestControllerAdvice`）**；自定义异常只用 `BusinessException`、`UnauthorizedException`、`ForbiddenException`。Controller 层不做 try-catch，业务异常一律抛出交由全局处理器统一转换。
 5. 工具类放在 `flash-common` 的 `util` 包，类名使用**单数**（`JwtUtil`、`PasswordUtil`）。

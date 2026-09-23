@@ -8,13 +8,13 @@ GitHub:[lark5480/flash-sale: 高并发秒杀系统 — Spring Cloud 微服务架
 
 ### 知识概述
 
-Flash Sale 采用 **Caffeine（L1）→ Redis（L2）→ DB（L3）** 三级缓存架构。`FlashSaleServiceImpl` 和 `ItemServiceImpl` 中通过注入 `Cache<String, String>`（Caffeine）和 `StringRedisTemplate`（Redis）实现逐级查询与回填。配合三级防护机制——空值标记防穿透、`randomTtl()` 防雪崩、Caffeine `get(key, function)` per-key 同步防击穿——保障高并发场景下的缓存稳定性。
+Flash Sale 采用 **Caffeine（L1）→ Redis（L2）→ DB（L3）** 三级缓存架构。`FlashSaleServiceImpl` 和 `ItemServiceImpl` 中通过注入 `Cache<String, String>`（Caffeine）和 `StringRedisTemplate`（Redis）实现逐级查询与回填。配合三级防护机制——空值标记防穿透、`randomTtl()` 防雪崩、Caffeine `get(key, function)` per-key 同步防击穿——保障高并发场景下的缓存稳定性。L1 是进程内缓存，多节点一致性由 **Redis Pub/Sub 广播失效**（`cache:invalidate` 频道）收敛，短 TTL 兜底。
 
 ### 面试 Q&A
 
 **Q1: 三级缓存的一致性怎么保证？如果 Caffeine 和 Redis 数据不一致怎么办？**
 
-**A:** 写操作同时失效两级缓存（invalidate Caffeine + delete Redis），下次读请求逐级回源并回填。Caffeine TTL 很短（15-120s），即使极端情况下不一致也会在 TTL 后自动修复。多节点场景下 Caffeine 是本地缓存无法跨节点同步，但短 TTL 已经限制了不一致窗口。
+**A:** 写操作同时失效两级缓存（invalidate Caffeine + delete Redis），下次读请求逐级回源并回填。**多节点场景下 L1 有跨节点失效广播**：写节点本地失效后，通过 Redis Pub/Sub 频道 `cache:invalidate` 广播 `{cacheName, key, sourceNodeId}`，其他节点的 `CacheInvalidateListener` 收到后失效各自的 Caffeine（`sourceNodeId` 用于跳过自己发的消息）。这条链路是尽力而为——Pub/Sub 不补发离线节点，所以 Caffeine 的短 TTL（60-120s）仍是最终兜底。机制、发布点与四条边界见[数据设计 §3](../architecture/data-design.md#_3-三级缓存的跨节点失效-redis-pub-sub)。
 
 **Q2: 缓存穿透、击穿、雪崩你项目里怎么处理的？**
 
@@ -257,7 +257,7 @@ RocketMQ 消息链路采用 **同步刷盘 + 有限重试 + 死信队列** 三�
 
 **Q27: 自定义业务指标怎么做的？埋在哪里？**
 
-**A:** `FlashSaleMetrics` 通过构造器注入 `MeterRegistry`，注册三个指标：`flashsale.order.success`（Counter，下单成功次数）、`flashsale.order.fail`（Counter，下单失败次数）、`flashsale.order.duration`（Timer，下单处理耗时，含 `.publishPercentileHistogram()` + `serviceLevelObjectives(50ms, 100ms, 500ms, 1s, 5s)`）。
+**A:** `FlashSaleMetrics` 通过构造器注入 `MeterRegistry` 注册业务指标，下单相关的三个是：`flashsale.order.success`（Counter，下单成功次数）、`flashsale.order.fail`（Counter，tag `reason` 归因）、`flashsale.order.duration`（Timer，下单处理耗时，含 `.publishPercentileHistogram()`）。**完整清单别背数字**：库存（remaining / inflight / drift / rebuild）、MQ（发送与消费计数与耗时）、端到端结算延迟、采样错误等一并注册在同一个类里，权威列表见[可观测性 §5](../architecture/observability.md#_5-自定义业务指标)——指标会加，写死条数的回答下次就对不上了。
 
 **埋点位置**：
 - `flashsale.order.success`：在 `FlashOrderConsumer` 订单创建成功时记录（真正落库成功）
@@ -280,7 +280,9 @@ RocketMQ 消息链路采用 **同步刷盘 + 有限重试 + 死信队列** 三�
 
 **Q36: Sentinel 熔断触发了怎么确认？**
 
-**A:** 三种方式：(1) Dashboard 实时监控看熔断状态（CLOSED → OPEN）；(2) 看日志 — 熔断触发时请求不走 `purchase()` 方法体，直接进 `purchaseBlock()`，所以业务日志（如 `Redis 库存 Key SETNX`）不会出现；(3) `curl http://localhost:8081/actuator/sentinel` 看熔断器状态码（0=关闭，1=打开，2=半开）。
+**A:** 两种方式：(1) Dashboard 实时监控看熔断状态（CLOSED → OPEN）；(2) 看日志与指标 — 熔断触发时请求不走 `purchase()` 方法体，直接进 `purchaseBlock()`，所以业务日志（如 `Redis 库存 Key SETNX`）不会出现，同时 `flashsale_order_fail_total{reason="rate_limited"}` 计数上涨。
+
+⚠️ 别在面试里说「`curl /actuator/sentinel` 看状态码」：`management.endpoints.web.exposure.include` 只放了 `health,info,prometheus`，该端点按现配置取不到。要看熔断后的真实效果，走 Prometheus 查 `flashsale_order_fail_total` 更靠谱。
 
 ---
 
@@ -320,7 +322,7 @@ RocketMQ 消息链路采用 **同步刷盘 + 有限重试 + 死信队列** 三�
 
 **Q33: 测试这块现在到什么程度？接下来还能改什么？**
 
-**A:** 之前是「CI 只构建不测试（项目也没测试）」，已经补上了：后端 49 个用例（flash-common 15 / flash-service 34），CI 改成 `mvn -B clean verify`，所以新改动不带可跑测试就会直接把流水线弄红。
+**A:** 之前是「CI 只构建不测试（项目也没测试）」，已经补上了：后端测试覆盖到秒杀链路的不变式，CI 改成 `mvn -B clean verify`，所以新改动不带可跑测试就会直接把流水线弄红。用例数我答「以 CI 的 surefire 汇总为准」而不报具体数字——加了用例，报死的数字就是下一个错。清单与跑法见[测试](../development/testing.md#_1-测试类与覆盖的不变式)。
 
 覆盖的是秒杀链路的不变式而不是行数：库存键存在就绝不覆盖、重建 = `DB stock − 在途`、在途读失败 fail-closed、终态标记的 SETNX 胜出者才递减在途、状态键 TTL 必须覆盖整场；两处 Lua 的语义用 **Testcontainers 起真实 `redis:7-alpine`** 跑（含 200 并发抢 50 库存恰好成功 50 单不超卖），注入 5 条脚本级回归验证测试不是空跑。
 

@@ -46,7 +46,7 @@ management:
   endpoints:
     web:
       exposure:
-        include: health,info,prometheus,metrics,env,beans
+        include: health,info,prometheus   # 仅暴露这三个，metrics/env/beans 未开放
   metrics:
     tags:
       application: ${spring.application.name}  # 区分 flash-api / flash-admin
@@ -55,6 +55,10 @@ management:
       percentiles-histogram:
         http.server.requests: true
 ```
+
+::: warning `/actuator/metrics` 打不开不是故障
+暴露清单只有 `health,info,prometheus`，因此 `curl /actuator/metrics` 返回 404 属预期。查指标一律走 `/actuator/prometheus` 的文本输出，或直接在 Prometheus 里查。
+:::
 
 ::: danger 两个必须记住的坑
 1. **P99 依赖 `_bucket`**：P99 分位数计算依赖 `_bucket` 指标，Spring Boot 默认只暴露 `_count` / `_sum`。不配 `percentiles-histogram: true` 会导致 Grafana P99 面板 "No data"。自定义 Timer 必须加 `.publishPercentileHistogram()`。埋点在 Controller 层（用户调一次统计一次），不在 Consumer 层。
