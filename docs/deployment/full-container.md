@@ -39,7 +39,7 @@ docker compose -f docker-compose.yml -f docker-compose.full.yml up -d
 | **真实下单闭环** | **10/10 = 100%**（取图形验证码 → 下单 → 轮询 `messageKey` 至 `DONE`）；下单接口 P50 57.3ms / P95 370.0ms |
 | Prometheus | 容器内健康，宿主 9090 不可达（卡点 5） |
 
-> 下单闭环验证用脚本：[`scripts/wrk/order-e2e.ps1`](../../scripts/wrk/order-e2e.ps1)。同一用户在单个活动上有购买上限（`flash_sale.limit_per_user`），每轮必须换一个全新用户，否则会稳定拿到 `50002 已达到限购数量`。
+> 下单闭环验证用脚本：`scripts/wrk/order-e2e.ps1`（仓库内路径，不是文档站页面，故不做超链接——VitePress 会把指向非 `.md` 的相对链接判为死链）。同一用户在单个活动上有购买上限（`flash_sale.limit_per_user`），每轮必须换一个全新用户，否则会稳定拿到 `50002 已达到限购数量`。
 
 ## 命令顺序（含数据库初始化）
 
