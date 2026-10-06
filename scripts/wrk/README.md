@@ -7,6 +7,7 @@
 | `run-benchmark.sh` | 一键跑完全部场景并输出汇总表（JWT 自动生成、结果落 `results/<时间戳>/`） |
 | `flash-sale-test.lua` | wrk 请求编排脚本；场景由 **`SCENARIO` 环境变量**决定 |
 | `order-e2e.ps1` | **真实下单闭环**顺序测试（取图形验证码 → 解算术 → 下单 → 轮询 `messageKey` 至 `DONE`） |
+| `cache-bench.sh` | **缓存命中率度量**：造流量 + 读 `actuator/prometheus` 的 `cache_gets_total` + 算命中率，一条命令出结果（口径见 [docs/notes/benchmark-2026-10-06.md §3](../../docs/notes/benchmark-2026-10-06.md)） |
 | `flash-sale-auth.lua` | 可选的"登录换 token"辅助脚本。`run-benchmark.sh` **不使用**它（改用 Python 直接签 JWT 以绕过验证码），保留作参考 |
 
 ## 快速开始
@@ -20,6 +21,11 @@ cd scripts/wrk
 ```powershell
 # 真实下单闭环（Windows 原生；需要一批全新用户，见下方「限购」说明）
 pwsh -File scripts/wrk/order-e2e.ps1 -Iterations 12 -UserIdCsv "5,6,7,8,9,10,11,12"
+```
+
+```bash
+# 缓存命中率（需先起中间件并让 flash-api 跑在宿主机；base_url 是直连 api，不是网关）
+bash scripts/wrk/cache-bench.sh http://172.30.16.1:8081 30s 50
 ```
 
 ## 各场景真正测的是什么

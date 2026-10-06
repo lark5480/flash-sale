@@ -114,9 +114,9 @@ wsl -e bash -c "cd /mnt/f/.../scripts/wrk && ./run-benchmark.sh http://localhost
 # 3) 真实下单闭环：先准备一批全新用户（同一用户受每人限购约束，会一直拿到 50002）
 pwsh -File scripts/wrk/order-e2e.ps1 -Iterations 12 -MinIntervalMs 1300 -UserIdCsv "5,6,7,8"
 
-# 4) 缓存命中率：宿主机构建并启动，然后直连 8081 打流量并读指标
+# 4) 缓存命中率：宿主机构建并启动，然后用 cache-bench.sh 一条命令出结果
 mvn -pl flash-api -am package -DskipTests && java -jar flash-api/target/flash-api-1.0.0.jar
-curl -s http://localhost:8081/actuator/prometheus | grep '^cache_'
+bash scripts/wrk/cache-bench.sh http://<宿主IP>:8081 30s 50   # 直连 api，不是网关；宿主 IP 见下方注意
 ```
 
 ::: warning WSL 访问宿主机 Java 进程的坑
