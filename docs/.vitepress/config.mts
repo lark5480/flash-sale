@@ -69,6 +69,7 @@ export default defineConfig({
           text: '知识笔记',
           items: [
             { text: '知识笔记与面试 Q&A', link: '/notes/interview-qa' },
+            { text: '压测与缓存度量记录（2026-10-06）', link: '/notes/benchmark-2026-10-06' },
           ],
         },
       ],
