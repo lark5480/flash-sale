@@ -117,11 +117,27 @@ flash-sale
 
 ## 快速启动
 
-### 方式一：Docker Compose 全量部署（本项目未采用，日常请用方式二）
+### 方式一：Docker Compose 全量部署（2026-10-06 起可用）
 
-compose 文件按「**只用 Docker 起中间件**」维护，后端/前端容器这一段保留着但**不保证可用**：全量启动当前已知有 5 处卡点（Compose bake 构建 panic、broker 注册地址、前端 nginx 未反代、Nacos 全新实例初始化、Rancher/WSL2 宿主端口转发失效），其中最后一道属虚拟化层网络、不在仓库能解决范围内。
+新增覆盖文件 `docker-compose.full.yml`，一条命令起全栈（中间件 + 后端 + 前端 + 监控，14 个容器）：
 
-> 逐项结论、绕法与命令顺序已归档到[全量容器化部署](docs/deployment/full-container.md)，此处不再展开。日常开发请用方式二。
+```bash
+docker compose -f docker-compose.yml -f docker-compose.full.yml up -d
+```
+
+**已验证**：14 个容器全部启动；经前端容器 `5173` 反代 `/api/**` 到网关返回 **200**；**全容器环境下单闭环 10/10 成功**（取图形验证码 → 下单 → 轮询 `messageKey` 至 `DONE`）。
+
+**为什么需要这个覆盖文件**：`docker-compose.yml` 是按方式二（只 Docker 起中间件、后端前端跑宿主机）维护的，其中三处配置与全量容器化互斥，覆盖文件只替换这三处，**方式二的日常用法完全不受影响**：
+
+| 冲突点 | 方式二（基础文件） | 全量模式（full.yml 覆盖） |
+|---|---|---|
+| RocketMQ broker 注册地址 | `broker.conf`：`brokerIP1 = 127.0.0.1`——宿主机进程连 `127.0.0.1:10911` 命中发布端口 | `broker-docker.conf`：`brokerIP1 = rocketmq-broker`——容器网络内可解析 |
+| 前端容器 nginx | 不挂载（前端跑宿主机 dev server） | 挂载 `docker/nginx/*.conf`（SPA `try_files` + 反代到 `gateway:8080`） |
+| Prometheus 抓取地址 | `host.docker.internal:8081/8082` | `api:8081` / `admin:8082`（`prometheus-docker.yml`） |
+
+**已知残留问题（1 处，不在仓库可解决范围）**：Rancher Desktop / WSL2 下**个别**发布端口会转发失效。本次实测 Prometheus 容器内部完全健康（自带 `/-/healthy` 通过、配置已加载），但宿主 `localhost:9090` 无监听，`--force-recreate` 无效——即原「卡点 5」，属虚拟化层网络，需重启容器运行时。其余端口（8080/8081/8082/5173/5174/3000/8718/8848）实测均正常。
+
+> 日常开发仍建议用方式二：改一行 Java 不必重建镜像、不必重启容器。逐项实测记录见[全量容器化部署](docs/deployment/full-container.md)。
 
 ### 方式二：本地手动启动（日常开发用这个）
 
