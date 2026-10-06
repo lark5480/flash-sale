@@ -199,19 +199,30 @@ Flash Sale 采用 **Caffeine（L1）→ Redis（L2）→ DB（L3）** 三级缓�
 
 ### 知识概述
 
-项目使用 **wrk** 作为压测工具，运行在 WSL2 环境中通过 `resolv.conf nameserver` 获取 Windows 宿主机 IP 实现跨环境访问。压测体系包含：`flash-sale-auth.lua` 加载 JWT Token 实现认证请求、`flash-sale-test.lua` 编排混合请求（读 + 写按比例分配）、`run-benchmark.sh` 统一调度多场景压测并输出结果报告。
+项目使用 **wrk** 作为压测工具，运行在 WSL2 环境中通过 `resolv.conf nameserver` 获取 Windows 宿主机 IP 实现跨环境访问。压测体系包含：`flash-sale-test.lua` 按 **`SCENARIO` 环境变量**编排请求（活动列表 / 详情 / 下单 / 混合 70:20:10）、`run-benchmark.sh` 统一调度多场景并输出汇总表（含各场景非 2xx 数）、`order-e2e.ps1` 单独验证**真实下单闭环**。`flash-sale-auth.lua` 是"登录取 token"的备选方案，主流程改由 Python 直接签 JWT 以绕过验证码，该脚本目前未被引用。
+
+> **2026-10-06 修正**：本节原先的「混合场景 QPS 416+」与「下单场景 500 并发出现 500 错误 → 下单链路是高并发瓶颈」两处表述**均不成立**，原因见本节末尾「修正记录」。
 
 ### 面试 Q&A
 
 **Q18: wrk 压测你是怎么设计的？如何保证压测结果有效？**
 
 **A:**
-- 脚本设计：`flash-sale-auth.lua` 加载 JWT Token，`flash-sale-test.lua` 编排混合请求，`run-benchmark.sh` 统一调度
+- 脚本设计：`flash-sale-test.lua` 按 `SCENARIO` 编排请求，`run-benchmark.sh` 统一调度，`order-e2e.ps1` 负责下单闭环
 - 认证绕过：Python 直接生成 JWT Token 写入 `token.txt`，避免验证码干扰
 - 跨环境：WSL2 通过 `resolv.conf nameserver` 获取 Windows 宿主机 IP，避免 localhost 不通
-- 5 场景覆盖：基线（10 并发）、活动列表（100 并发）、详情（100 并发）、下单（500 并发）、混合（100 并发）
-- 结果：混合场景 QPS 416+，P99 <70ms；读接口 P99 <100ms
-- ⚠️ 下单场景 500 并发出现 500 错误 + socket error，**下单链路是高并发瓶颈**，读链路不是
+- 场景划分：基线（10 并发）、活动列表（100 并发）、详情（100 并发）、混合 70:20:10（100 并发）；**下单虽单独成场景，但 wrk 只能测到验证码/限流拒绝路径**，真实下单必须用 `order-e2e.ps1` 顺序验证
+- 结果（本机 8C32G、容器化部署、wrk 4 线程）：活动列表 c=100 **约 1.7–2.0k req/s（P99 13–15ms）**、活动详情 c=100 **约 2.0–2.1k req/s（P99 10–12ms）**，两场景**均零错误**；下单闭环 **12/12 = 100% 成功**，下单接口 P95 **83.5ms**、端到端到订单 `DONE` P95 **342ms**
+- **结果有效性怎么保证**：① 每个场景打印自己的 `SCENARIO`，杜绝"场景名与实际请求不符"；② 汇总表带各场景**非 2xx 数**，防止把 4xx/5xx 当吞吐引用；③ 同机重复跑取**区间**而非单点，承认约 18% 的运行间波动
+
+#### 修正记录（2026-10-06）
+
+原压测脚本有两处导致"结果名不副实"的缺陷，均已修复（`git log` 与历史 `results/` 可佐证）：
+
+1. **场景变量硬编码 → 五个"场景"实际打同一个接口**：`flash-sale-test.lua` 里 `local scenario = "active_list"` 写死，而 `run-benchmark.sh` 只替换 URL、不替换它；又因 `request()` 用 `wrk.format(method, path, headers)` **显式传 path**（覆盖 URL 的 path），所以 A~E 全部请求 `/api/flash-sale/active`，只有并发数不同。**证据**：`results/20260730_165424/` 五个文件的 `done()` 输出**都写着「场景: active_list」**，其中 `E_mixed` 的 **416.47 req/s** 正是原先引用的"混合场景 QPS 416+"。
+2. **下单路径写错**：原写 `POST /api/flash-order/purchase?flashSaleId=`，真实接口是 `POST /api/flash-sale/{flashSaleId}/purchase?captchaId=&captchaAnswer=`（两个参数是 `@RequestParam`，不是请求体字段）。因缺陷 1，该分支长期未被走到；一旦走到即 100% 返回 `{"code":500,"msg":"No static resource api/flash-order/purchase."}`。**因此原先"下单场景出现 500 错误 = 下单链路是高并发瓶颈"是误判**——那是路径不存在导致的 500，与并发能力无关。
+
+另有一处环境坑（不影响"只 Docker 起中间件 + IDE 起前后端"的用法，但会让 Compose 全栈走不通下单）：`docker/rocketmq/conf/broker.conf` 的 `brokerIP1 = 127.0.0.1` 会让**容器内**的 flash-api 去连自己的 `10911` 而失败（`MQClientException: Send [3] times still failed` / `RemotingConnectException: connect to 127.0.0.1:10911 failed`）。宿主机跑应用时 `127.0.0.1:10911` 命中发布端口，因此不受影响。
 
 ---
 
@@ -225,7 +236,7 @@ RocketMQ 消息链路采用 **同步刷盘 + 有限重试 + 死信队列** 三�
 
 **Q23: RocketMQ 同步刷盘和异步刷盘什么区别？为什么选同步刷盘？**
 
-**A:** 异步刷盘（ASYNC_FLUSH）消息写入 PageCache 即返回 ACK，吞吐高但 Broker 宕机可能丢消息；同步刷盘（SYNC_FLUSH）等待刷盘完成才返回 ACK，吞吐下降约 30-50%，但消息不丢。**秒杀下单是资金相关场景，消息不能丢，值得牺牲吞吐换可靠性。** 压测显示下单场景 QPS 250+ 已满足个人项目需求，同步刷盘的性能损失可接受。
+**A:** 异步刷盘（ASYNC_FLUSH）消息写入 PageCache 即返回 ACK，吞吐高但 Broker 宕机可能丢消息；同步刷盘（SYNC_FLUSH）等待刷盘完成才返回 ACK，吞吐下降约 30-50%，但消息不丢。**秒杀下单是资金相关场景，消息不能丢，值得牺牲吞吐换可靠性。** 下单路径的吞吐无法用 wrk 测准（受一次性图形验证码与 `@RateLimit(permits=5, windowSeconds=5)` 约束），因此改以**闭环成功率与端到端延迟**衡量：12/12 成功、下单接口 P95 83.5ms、端到端到订单 `DONE` P95 342ms，同步刷盘的性能损失在该量级下可接受。
 
 **Q24: maxReconsumeTimes 设成 3 是为什么？默认 16 次不够吗？**
 
