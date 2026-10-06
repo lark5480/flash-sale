@@ -1,0 +1,53 @@
+# 全量容器化部署覆盖文件（方式一）
+#
+# 用法：
+#   docker compose -f docker-compose.yml -f docker-compose.full.yml up -d
+#
+# 为什么需要这个文件：docker-compose.yml 是按「只 Docker 起中间件 + 后端/前端跑宿主机」（方式二）
+# 维护的，其中三处配置与全量容器化互斥。本文件只做这三处替换，不动基础文件，
+# 因此方式二的日常用法完全不受影响。
+#
+#   1. RocketMQ broker 的注册地址
+#      方式二用 broker.conf（brokerIP1 = 127.0.0.1）：宿主机进程连 127.0.0.1:10911 命中发布端口，可用；
+#      但容器内的 api/admin 会把 127.0.0.1 解析成自己 → MQClientException / RemotingConnectException。
+#      全量模式改用 broker-docker.conf（brokerIP1 = rocketmq-broker，容器网络内可解析）。
+#
+#   2. 两个前端容器缺 nginx 配置
+#      nginx:alpine 默认只当静态文件处理，前端 axios 走相对路径 /api/**，于是页面能开、接口全 404。
+#      挂上 docker/nginx/*.conf（含 SPA try_files 与到 gateway:8080 的反代）。
+#
+#   3. Prometheus 抓取地址与端口映射
+#      方式二下 api/admin 跑宿主机，由 host.docker.internal:8081/8082 抓取，且容器不映射宿主端口；
+#      全量模式下改为容器名 api:8081 / admin:8082，并放开宿主端口便于直接排查。
+#
+# 注意：RocketMQ 的 command 与 Prometheus 的 command 在 Compose 覆盖语义中是「替换」而非「追加」，
+# 卷挂载按 target 合并，因此下面统一把新配置文件挂到新路径、再用 command 指过去，避免与原挂载冲突。
+
+services:
+  rocketmq-broker:
+    command: sh mqbroker -n rocketmq-namesrv:9876 -c /home/rocketmq/conf/broker-docker.conf
+    volumes:
+      - ./docker/rocketmq/conf/broker-docker.conf:/home/rocketmq/conf/broker-docker.conf:ro
+
+  api:
+    ports:
+      - "8081:8081"
+
+  admin:
+    ports:
+      - "8082:8082"
+
+  frontend:
+    volumes:
+      - ./docker/nginx/frontend.conf:/etc/nginx/conf.d/default.conf:ro
+
+  admin-frontend:
+    volumes:
+      - ./docker/nginx/admin-frontend.conf:/etc/nginx/conf.d/default.conf:ro
+
+  prometheus:
+    command:
+      - '--config.file=/etc/prometheus/prometheus-docker.yml'
+      - '--storage.tsdb.retention.time=15d'
+    volumes:
+      - ./docker/prometheus/prometheus-docker.yml:/etc/prometheus/prometheus-docker.yml:ro
