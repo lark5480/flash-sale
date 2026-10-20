@@ -4,12 +4,12 @@
 ## 项目结构（多模块 Maven 项目）
 ```
 flash-sale (parent pom)
-├── flash-common      — 公共模块：ResultVO、ResultCode、BaseEntity、GlobalExceptionHandler、BusinessException、JwtUtil、PasswordUtil、SnowflakeIdGenerator、JacksonConfig（Long→String 序列化）、MyMetaObjectHandler、RedisConstants、RocketMQConstants、StatusEnum、annotation（RateLimit）
-├── flash-model       — 数据模型：entity（User/Item/FlashSale/FlashOrder）、dto（LoginDTO/RegisterDTO）、vo（PageVO/UserVO/ItemVO/FlashSaleVO/FlashOrderVO/LoginVO）、enums（UserRoleEnum/FlashSaleStatusEnum/OrderStatusEnum）
-├── flash-mapper      — MyBatis-Plus Mapper：UserMapper、ItemMapper、FlashSaleMapper、FlashOrderMapper
-├── flash-service     — 业务层：service + service.impl、config（MyBatisPlusConfig、RedisConfig、CacheConfig（Caffeine三级缓存）、IdGeneratorConfig（雪花ID Bean）、DataInitRunner、AsyncConfig（空，已迁至MQ））、filter（JwtAuthenticationFilter）、interceptor（RateLimitInterceptor）、producer（FlashOrderProducer）、consumer（FlashOrderConsumer）、message（FlashOrderMessage）
-├── flash-api         — C 端 API 应用（端口独立）：AuthController、FlashOrderController、FlashSaleController、ItemController、CaptchaController + config（ApiSecurityConfig、WebMvcConfig）
-├── flash-admin       — 后台管理应用（端口独立）：AuthController、FlashSaleController、ItemController、OrderController、UserController、CaptchaController + scheduler（FlashSaleScheduler、OrderScheduler）+ config（AdminSecurityConfig、WebMvcConfig）
+├── flash-common      — 公共模块：ResultVO、ResultCode、BaseEntity、handler（GlobalExceptionHandler）、exception（BusinessException/UnauthorizedException/ForbiddenException）、util（JwtUtil/PasswordUtil/SnowflakeIdGenerator）、config（JacksonConfig（Long→String 序列化）、MyMetaObjectHandler、FlexibleLocalDateTimeDeserializer）、constant（RedisConstants/RocketMQConstants）、enums（StatusEnum）、annotation（RateLimit）
+├── flash-model       — 数据模型：entity（User/Item/FlashSale/FlashOrder）、dto（LoginDTO/RegisterDTO）、vo（PageVO/UserVO/ItemVO/FlashSaleVO/FlashOrderVO/LoginVO/DashboardStatsVO）、enums（UserRoleEnum/FlashSaleStatusEnum/OrderStatusEnum）
+├── flash-mapper      — MyBatis-Plus Mapper：UserMapper、ItemMapper、FlashSaleMapper、FlashOrderMapper（裸 SQL 列名由 flash-service 的 FlashOrderMapperSqlSchemaTest 与 sql/init.sql 比对守护）
+├── flash-service     — 业务层：service + service.impl（含 StatsService）、config（MyBatisPlusConfig、RedisConfig（库存扣减/归还 + 限流三份 Lua 脚本 Bean）、CacheConfig（Caffeine 三级缓存并注册 CaffeineCacheMetrics）、CacheInvalidatePublisher/Listener、RedisPubSubConfig、IdGeneratorConfig（雪花ID Bean）、DataInitRunner、AsyncConfig（空，已迁至MQ））、filter（JwtAuthenticationFilter）、interceptor（RateLimitInterceptor）、producer（FlashOrderProducer）、consumer（FlashOrderConsumer、FlashOrderDeadLetterConsumer、FlashOrderSettler）、stock（FlashStockState：库存/限购/在途状态键的唯一读写入口）、metrics（FlashSaleMetrics、FlashStockMetricsSampler）、message（FlashOrderMessage、CacheInvalidateMessage）
+├── flash-api         — C 端 API 应用（端口独立）：AuthController、FlashOrderController、FlashSaleController、ItemController、CaptchaController、ImageController（GET /images/{filename}，读仓库根 images/ 目录，不在 /api/** 链内） + config（ApiSecurityConfig、WebMvcConfig）
+├── flash-admin       — 后台管理应用（端口独立）：AuthController、FlashSaleController、ItemController、OrderController、UserController、CaptchaController、StatsController（/admin/stats/overview 控制台统计） + scheduler（FlashSaleScheduler、OrderScheduler）+ config（AdminSecurityConfig、WebMvcConfig）
 ├── flash-gateway     — Spring Cloud Gateway 网关：CorsConfig、AuthGlobalFilter
 ├── flash-frontend        — C 端前端（Vue 3）
 └── flash-admin-frontend  — 后台前端（Vue 3 + Element Plus）
@@ -57,12 +57,12 @@ flash-gateway → flash-common（排除 web/tomcat/mybatis/validation 等重量�
 10. 多 DB 写操作方法必须使用 @Transactional(rollbackFor = Exception.class)
 11. 消费者隔离：@ConditionalOnProperty(name="flash.flash.consumer.enabled")，flash-api 启用、flash-admin 禁用，避免同消费组冲突
 12. 雪花 ID（SnowflakeIdGenerator）用于分布式订单 ID，JacksonConfig 注解驱动 Long→String 序列化解决 JS 精度丢失
-13. 配置文件按环境拆分：application.yml（通用）+ application-dev.yml（本地开发）+ application-prod.yml（生产环境变量）+ application-docker.yml（Docker Compose 容器名访问）
-14. 监控栈：Actuator + Micrometer + Prometheus + Grafana + Sentinel。★ 关键坑：P99 计算依赖 `_bucket` 指标，application.yml 必须配 `management.metrics.distribution.percentiles-histogram.http.server.requests: true`，否则 Grafana P99 面板 "No data"。自定义 Timer 必须加 `.publishPercentileHistogram()`。埋点在 Controller 层（用户调一次统计一次），不在 Consumer 层。★ Prometheus 抓取地址随部署方式切换，两者互斥（不可同一份配置通用）：
-  - 本地开发（后端跑宿主机、中间件与监控容器化）：`host.docker.internal:8081` / `host.docker.internal:8082`
-  - 全量容器化部署（后端在 Compose 内）：改回容器名 `api:8081` / `admin:8082`，并放开 docker-compose.yml 中 api/admin 的宿主端口映射注释
-  - 改完 `docker/prometheus/prometheus.yml` 必须执行 `docker restart flash-prometheus`——挂载的配置文件不会热加载，不重启 Targets 会停留在旧配置（表现为大盘全部 No data）
-15. 测试与验证：CI 跑 `mvn -B clean verify`（不再 `-DskipTests`），因此**改动必须带可跑测试**，否则 CI 直接红。只测单模块要带 `-am`（`mvn -o -pl flash-service -am clean test`），漏掉它会按本地仓库旧 jar 解析兄弟模块并报 `NoSuchMethodError`；只跑一个类再加 `-Dsurefire.failIfNoSpecifiedTests=false`。库存 Lua 用 Testcontainers 跑真实 Redis（`redis:7-alpine`），无 Docker 的机器整类跳过。★ 跑 `java -jar` 前一律 `mvn clean package`：IDE 后台编译器会往 `target/classes` 写坏 class，增量构建会直接打包它，表现为 `ClassNotFoundException` 只报裸类名。端到端验证方式：中间件 `docker compose up -d` + 后端在宿主机 `java -jar`（dev profile 指向 127.0.0.1，`broker.conf` 的 `brokerIP1 = 127.0.0.1`）
+13. 配置文件按环境拆分：application.yml（通用）+ application-dev.yml（本地开发）+ application-prod.yml（生产环境变量）+ application-docker.yml（容器网络内访问中间件）。★ 部署是两套 Compose 文件，不要为全量启动改基础文件：`docker-compose.yml` 按「只 Docker 起中间件、后端/前端跑宿主机」维护，全量容器化叠加覆盖文件 `docker compose -f docker-compose.yml -f docker-compose.full.yml up -d`；覆盖文件只替换三处互斥项（broker 改 `broker-docker.conf`、两个前端挂 `docker/nginx/*.conf`、Prometheus 换 `prometheus-docker.yml` 并放开 api/admin 宿主端口）。前端容器挂的是 `flash-frontend/dist`、`flash-admin-frontend/dist`，全量启动前必须先 `npm run build`
+14. 监控栈：Actuator + Micrometer + Prometheus + Grafana + Sentinel。★ 关键坑：P99 计算依赖 `_bucket` 指标，application.yml 必须配 `management.metrics.distribution.percentiles-histogram.http.server.requests: true`，否则 Grafana P99 面板 "No data"。自定义 Timer 必须加 `.publishPercentileHistogram()`。埋点在 Controller 层（用户调一次统计一次），不在 Consumer 层。★ Prometheus 抓取地址随部署方式切换，已落成两份文件（不要再手改基础那份）：
+  - 本地开发（后端跑宿主机、中间件与监控容器化）：`docker/prometheus/prometheus.yml`，targets 用 `host.docker.internal:8081` / `:8082`
+  - 全量容器化：`docker/prometheus/prometheus-docker.yml`，targets 用容器名 `api:8081` / `admin:8082`，由 `docker-compose.full.yml` 覆盖挂载
+  - 新增被抓取的服务时两份都要改；改完必须执行 `docker restart flash-prometheus`——挂载的配置文件不会热加载，不重启 Targets 会停留在旧配置（表现为大盘全部 No data）
+15. 测试与验证：CI 跑 `mvn -B clean verify`（不再 `-DskipTests`），因此**改动必须带可跑测试**，否则 CI 直接红。只测单模块要带 `-am`（`mvn -o -pl flash-service -am clean test`），漏掉它会按本地仓库旧 jar 解析兄弟模块并报 `NoSuchMethodError`；只跑一个类再加 `-Dsurefire.failIfNoSpecifiedTests=false`。库存 Lua 用 Testcontainers 跑真实 Redis（`redis:7-alpine`），无 Docker 的机器整类跳过——**看全绿要先确认 daemon 在跑**，否则 `StockScriptRedisIntegrationTest` 那 13 例是被跳过而非通过。Mapper 手写 SQL 的列名由 `FlashOrderMapperSqlSchemaTest` 与 `sql/init.sql` 比对守护，改表结构或改 SQL 都要跑它。★ 跑 `java -jar` 前一律 `mvn clean package`：IDE 后台编译器会往 `target/classes` 写坏 class，增量构建会直接打包它，表现为 `ClassNotFoundException` 只报裸类名。端到端验证方式：中间件 `docker compose up -d` + 后端在宿主机 `java -jar`（dev profile 指向 127.0.0.1，`broker.conf` 的 `brokerIP1 = 127.0.0.1`）
 
 ## 生成要求
 1. 直接生成可运行的完整代码

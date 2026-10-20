@@ -18,7 +18,9 @@ import java.util.List;
 @Mapper
 public interface FlashOrderMapper extends BaseMapper<FlashOrder> {
 
-    @Select("SELECT * FROM flash_order WHERE message_key = #{messageKey} AND is_deleted = 0 LIMIT 1")
+    @Select("SELECT id, user_id, item_id, flash_sale_id, flash_price, message_key, status, "
+            + "create_time, update_time, is_deleted "
+            + "FROM flash_order WHERE message_key = #{messageKey} AND is_deleted = 0 LIMIT 1")
     FlashOrder selectByMessageKey(@Param("messageKey") String messageKey);
 
     /* 使用雪花ID插入订单（绕过 MyBatis-Plus IdType.AUTO 限制） */
